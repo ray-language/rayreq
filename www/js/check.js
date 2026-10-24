@@ -7,6 +7,7 @@ import { call } from "./api.js";
 import { setLanguage, t } from "./i18n.js";
 import { activeTab, isDirty, state } from "./state.js";
 import { $ } from "./util.js";
+import * as R from "./runner.js";
 import * as V from "./variables.js";
 
 const tick = () => new Promise((r) => setTimeout(r, 30));
@@ -316,6 +317,30 @@ export async function run(port) {
       `OpenAPI send: ${tab3.response.text || tab3.response.error}`);
     await A.closeTab(tab3.id);
     A.activate(tab.id);
+
+    // Runner: the imported API, plus a request that gets a 404, sent in the tree's order.
+    const missing = await call("requests.create", { project_id: state.project.id, folder_id: specOut.folder_id, name: "Missing" });
+    await call("requests.save", { request: { ...missing, url: "{{baseUrl}}/missing" } });
+    await A.refreshTree();
+    const openingRunner = R.openRunner(specOut.folder_id);
+    await until(() => $("runner-dialog").open, "the runner opened");
+    await openingRunner;
+    const runRows = () => [...$("runner-list").querySelectorAll("tr[data-id]")];
+    expect(runRows().map((r) => r.textContent.includes("Missing") ? "M" : r.textContent.includes("Echo a query") ? "G" : "P").join("") === "GPM",
+      `run order: ${runRows().map((r) => r.textContent).join(" | ")}`);
+    const counts = await R.run();
+    const results = runRows().map((r) => r.querySelector("[data-result]")?.dataset.result);
+    expect(counts && counts.passed === 2 && counts.failed === 1 && counts.errors === 0 && results.join() === "passed,passed,failed",
+      `run: ${JSON.stringify(counts)} ${results}`);
+    expect($("runner-summary").dataset.result === "failed" && runRows()[2].textContent.includes("404"), "the summary and the 404");
+    // Unchecked steps are skipped; stopping at the first failure leaves the rest unsent.
+    runRows()[1].querySelector("ray-checkbox").checked = false;
+    $("runner-stop-on-failure").checked = true;
+    const again = await R.run();
+    const results2 = runRows().map((r) => r.querySelector("[data-result]")?.dataset.result);
+    expect(again.passed === 1 && again.failed === 1 && results2.join() === "passed,skipped,failed", `second run: ${results2}`);
+    $("runner-stop-on-failure").checked = false;
+    $("runner-dialog").close("");
 
     // Spanish and back.
     setLanguage("es");

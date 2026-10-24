@@ -6,7 +6,7 @@ folders, saved requests, a response viewer and per-request history. Its model is
 
 ```sh
 make run        # open the app
-make test       # 139 tests: URLs, sending, the store, variables, auth, cookies, cURL, OpenAPI…
+make test       # 142 tests: URLs, sending, the store, variables, auth, cookies, cURL, OpenAPI…
 make check      # the real page driven through a send against a local server
 make            # every target
 ```
@@ -68,12 +68,20 @@ make            # every target
   send names it). Multipart bodies, OAuth 2 flows and references to other files are listed as
   not imported. Large descriptions are read in the background (GitHub's 10 MB one: ~0.7 s in
   the native build, a few seconds under `ray run`).
+- **Collection runner**: Request ▸ Run Folder… (⇧⌘R), or "Run folder…" / "Run all…" in the
+  tree's menu, sends the saved requests of a folder (or of the project) one after the other in
+  the tree's order, with the active environment. Each step is an ordinary send — variables,
+  auth, cookies, history — so a token captured by a login step authenticates the ones after
+  it. A step passes on 1xx–3xx and fails on 4xx/5xx; the list shows status, time and what went
+  wrong (an undefined variable, a capture that found nothing). Steps can be unchecked, the run
+  can stop at the first failure, wait between requests, or be stopped; a step opens its request.
+  It uses what is saved: unsaved changes in open tabs are not sent.
 - English and Spanish; light and dark themes; native menus with shortcuts.
 
 The rules for variables, and the rikuest bugs they come from, are in
 [docs/VARIABLES.md](docs/VARIABLES.md).
 
-Not yet: OAuth 2 flows, collection runner, multipart bodies.
+Not yet: OAuth 2 flows, multipart bodies, assertions on responses (the runner judges by status).
 
 ## How it is built
 
@@ -86,6 +94,7 @@ src/vars.ray       {{variables}}: the precedence chain (folders → environment)
 src/auth.ray       which auth applies (own or inherited) and the header/parameter it adds
 src/cookies.ray    the cookie jar's rules (RFC 6265): Set-Cookie in, Cookie header out
 src/curl.ray       curl commands: bash word splitting, options → request, send → command
+src/runner.ray     the runner's plan: a folder's requests in the tree's order
 src/openapi.ray    OpenAPI 3.x / Swagger 2.0 → folders, requests, variables and auth
 src/yaml.ray       YAML (the subset API descriptions use) into an ordered tree
 src/node.ray       that ordered tree, JSON in and out (keys in order, numbers as written)

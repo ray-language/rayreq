@@ -26,6 +26,7 @@ pub fn request_menu(lang: string) -> [ui.MenuItem] {
         ui.item("send", tr(lang, "Send", "Enviar"), "cmd+enter"),
         ui.item("duplicate", tr(lang, "Duplicate", "Duplicar"), "cmd+d"),
         ui.item("copy-curl", tr(lang, "Copy as cURL", "Copiar como cURL"), "cmd+shift+c"),
+        ui.item("run-folder", tr(lang, "Run Folder…", "Ejecutar carpeta…"), "cmd+shift+r"),
         ui.separator(),
         ui.item("focus-url", tr(lang, "Go to URL", "Ir a la URL"), "cmd+l"),
         ui.separator(),

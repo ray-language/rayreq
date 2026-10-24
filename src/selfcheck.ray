@@ -21,6 +21,9 @@ fn echo(req: webserver.Request) -> webserver.Response {
         r.set_cookie.push("sid=abc; Path=/; HttpOnly");
         return r;
     }
+    if (req.path == "/missing") {
+        return webserver.text(404, "no such thing");
+    }
     if (req.path == "/slow") {
         time.sleep(5000);
         return webserver.text(200, "late");

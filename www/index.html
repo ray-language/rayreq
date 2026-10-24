@@ -280,6 +280,21 @@
   <ray-button slot="footer" id="openapi-ok"><span data-i18n="openapi.import"></span></ray-button>
 </ray-dialog>
 
+<ray-dialog id="runner-dialog" size="xl">
+  <ray-stack gap="sm">
+    <p class="note" id="runner-note"></p>
+    <ray-group gap="lg" align="end">
+      <ray-switch id="runner-stop-on-failure" data-i18n-attr="label:runner.stopOnFailure"></ray-switch>
+      <ray-number-input id="runner-delay" min="0" max="60000" step="100" value="0" size="sm" suffix=" ms" data-i18n-attr="label:runner.delay"></ray-number-input>
+    </ray-group>
+    <ray-progress id="runner-progress" value="0" size="sm" data-i18n-attr="label:runner.progress"></ray-progress>
+    <p id="runner-summary" class="runner-summary" role="status"></p>
+    <div id="runner-list"></div>
+  </ray-stack>
+  <ray-button slot="footer" variant="default" data-dialog-close><span data-i18n="dialog.close"></span></ray-button>
+  <ray-button slot="footer" id="runner-run"><span data-i18n="runner.run"></span></ray-button>
+</ray-dialog>
+
 <ray-command-palette id="palette" native-menus hotkey=""></ray-command-palette>
 <ray-toaster position="bottom-end"></ray-toaster>
 

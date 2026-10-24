@@ -1,0 +1,58 @@
+//! The collection runner's plan: which saved requests a run of a folder (or of the whole
+//! project) sends, and in which order. The page sends them one after the other through the
+//! ordinary send, so captures, cookies and history work as for a single send, and a value
+//! captured by one request (a login's token) is there for the next.
+
+import model;
+
+/// One step of a run: the request and where it is ("Users / Admin"), for the results list.
+pub struct Step {
+    request: model.Request,
+    path: string,
+}
+
+fn by_position_folders(xs: [model.Folder]) -> [model.Folder] {
+    sort_by(xs, fn(a: model.Folder, b: model.Folder) -> bool {
+        a.position < b.position || (a.position == b.position && a.id < b.id)
+    })
+}
+
+fn by_position_requests(xs: [model.Request]) -> [model.Request] {
+    sort_by(xs, fn(a: model.Request, b: model.Request) -> bool {
+        a.position < b.position || (a.position == b.position && a.id < b.id)
+    })
+}
+
+/// The requests under `root` (0 = the whole project) in the order the tree shows them: in each
+/// folder its subfolders first, then its own requests, each by position.
+pub fn order(folders: [model.Folder], requests: [model.Request], root: int) -> [Step] {
+    var out: [Step] = [];
+    walk(folders, requests, root, "", out);
+    out
+}
+
+fn walk(
+    folders: [model.Folder],
+    requests: [model.Request],
+    parent: int,
+    path: string,
+    out: [Step]
+) {
+    let subfolders = by_position_folders(
+        folders.filter(fn(f: model.Folder) -> bool { f.parent_id == parent })
+    );
+    for f in subfolders {
+        walk(
+            folders,
+            requests,
+            f.id,
+            if (path == "") { f.name } else { path + " / " + f.name },
+            out
+        );
+    }
+    for r in by_position_requests(
+        requests.filter(fn(r: model.Request) -> bool { r.folder_id == parent })
+    ) {
+        out.push(Step { request: r, path: path });
+    }
+}

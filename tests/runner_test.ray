@@ -1,0 +1,177 @@
+// The collection runner: the order a run follows, the plan the page gets, and a run done the way
+// the page does it (one send after the other) where a captured token reaches the next request.
+
+import std/fs;
+import std/json;
+import std/net;
+import net/webserver;
+import api;
+import exec;
+import model;
+import runner;
+import store;
+
+fn folder(id: int, parent: int, name: string, position: int) -> model.Folder {
+    model.Folder {
+        id: id,
+        project_id: 1,
+        parent_id: parent,
+        name: name,
+        position: position,
+        auth: model.auth_of_kind("inherit")
+    }
+}
+
+fn request(id: int, folder_id: int, name: string, position: int) -> model.Request {
+    var r = model.new_request(1, folder_id, name);
+    r.id = id;
+    r.position = position;
+    r
+}
+
+fn labels(steps: [runner.Step]) -> [string] {
+    steps.map(fn(st: runner.Step) -> string {
+        if (st.path == "") { st.request.name } else { st.path + ": " + st.request.name }
+    })
+}
+
+@test
+fn a_run_follows_the_tree_folders_first_then_requests_by_position() {
+    let folders = [folder(1, 0, "Users", 1), folder(2, 1, "Admin", 0), folder(3, 0, "Auth", 0)];
+    let requests = [
+        request(10, 1, "list users", 1),
+        request(11, 1, "create user", 0),
+        request(12, 2, "promote", 0),
+        request(13, 3, "login", 0),
+        request(14, 0, "health", 0),
+        request(15, 1, "same position, later id", 1)
+    ];
+    assert_eq(
+        labels(runner.order(folders, requests, 0)),
+        [
+            "Auth: login",
+            "Users / Admin: promote",
+            "Users: create user",
+            "Users: list users",
+            "Users: same position, later id",
+            "health"
+        ]
+    );
+    // A folder's run: its paths start below it.
+    assert_eq(
+        labels(runner.order(folders, requests, 1)),
+        ["Admin: promote", "create user", "list users", "same position, later id"]
+    );
+    assert_eq(runner.order(folders, requests, 2).len(), 1);
+    assert_eq(runner.order(folders, [], 0).len(), 0);
+}
+
+// ---- through the protocol ------------------------------------------------------------------
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-runner").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+fn value(s: store.Store, body: string) -> json.Json {
+    match (api.handle(s, body)) {
+        api.Action.Reply(r) => {
+            let j = json.parse(r).unwrap();
+            if (!json.get_bool(j, "ok").unwrap_or(false)) {
+                panic(r);
+            }
+            json.member(j, "value").unwrap()
+        },
+        _ => panic("expected a reply"),
+    }
+}
+
+@test
+fn the_plan_names_the_run_and_lists_its_steps() {
+    let s = fresh();
+    let p = store.create_project(s, "Shop", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "Orders").unwrap();
+    let sub = store.create_folder(s, p.id, f.id, "Refunds").unwrap();
+    store.create_request(s, model.new_request(p.id, f.id, "list")).unwrap();
+    store.create_request(s, model.new_request(p.id, sub.id, "refund")).unwrap();
+    store.create_request(s, model.new_request(p.id, 0, "health")).unwrap();
+    let plan = value(s, "{\"op\":\"runner.plan\",\"project_id\":${p.id},\"folder_id\":${f.id}}");
+    assert_eq(json.get_string(plan, "name").unwrap(), "Orders");
+    let steps = json.get_array(plan, "steps").unwrap();
+    assert_eq(
+        steps.map(fn(x: json.Json) -> string { json.get_string(x, "path").unwrap() + "|" + json.get_string(x, "name").unwrap() }),
+        ["Refunds|refund", "|list"]
+    );
+    let all = value(s, "{\"op\":\"runner.plan\",\"project_id\":${p.id},\"folder_id\":0}");
+    assert_eq(
+        (json.get_string(all, "name").unwrap(), json.get_array(all, "steps").unwrap().len()),
+        ("Shop", 3)
+    );
+    // Another project's folder is refused.
+    let q = store.create_project(s, "Other", "").unwrap();
+    match (api.handle(s, "{\"op\":\"runner.plan\",\"project_id\":${q.id},\"folder_id\":${f.id}}")) {
+        api.Action.Reply(r) => assert(r.contains("not in this project")),
+        _ => panic("expected a reply"),
+    }
+}
+
+fn site(req: webserver.Request) -> webserver.Response {
+    if (req.path == "/token") {
+        return webserver.json_response("{\"token\":\"t-42\"}");
+    }
+    let auth = req.headers.get_or("authorization", "");
+    if (auth != "Bearer t-42") {
+        return webserver.text(401, "who are you");
+    }
+    webserver.text(200, "hello")
+}
+
+fn start() -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    let _t = spawn(fn() {
+        let _ = webserver.serve_options_on(l, webserver.options()
+            .quiet(), fn() -> fn(webserver.Request) -> webserver.Response { site });
+    });
+    port
+}
+
+/// What the page does for each step: get the saved request, send it, wait for the answer.
+fn run_step(s: store.Store, id: int) -> json.Json {
+    let r = value(s, "{\"op\":\"requests.get\",\"id\":${id}}");
+    let job = match (api.handle(s, "{\"op\":\"send\",\"run\":${id},\"request\":${json.stringify(r)}}")) {
+        api.Action.Send(j) => j,
+        api.Action.Reply(x) => panic(x),
+        _ => panic("unexpected action"),
+    };
+    json.member(json.parse(api.finish(s, job, exec.run(job.prepared))).unwrap(), "value").unwrap()
+}
+
+@test
+fn a_token_captured_by_one_step_authenticates_the_next() {
+    let port = start();
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "Flow").unwrap();
+    var a = model.auth_of_kind("bearer");
+    a.token = "{{token}}";
+    store.save_folder_auth(s, f.id, a).unwrap();
+    var login = model.new_request(p.id, f.id, "get a token");
+    login.url = "http://127.0.0.1:${port}/token";
+    login.auth = model.auth_of_kind("none");
+    login.captures = [model.Pair { key: "token", value: "token", enabled: true }];
+    store.create_request(s, login).unwrap();
+    var hello = model.new_request(p.id, f.id, "hello");
+    hello.url = "http://127.0.0.1:${port}/hello";
+    store.create_request(s, hello).unwrap();
+
+    let steps = json.get_array(value(s, "{\"op\":\"runner.plan\",\"project_id\":${p.id},\"folder_id\":${f.id}}"), "steps")
+        .unwrap();
+    let statuses = steps.map(fn(st: json.Json) -> int { json.get_int(run_step(s, json.get_int(st, "id").unwrap()), "status").unwrap() });
+    assert_eq(statuses, [200, 200]);
+    // Run in the other order, the token is not there yet: 401.
+    let env = store.active_environment(s, p.id).unwrap().unwrap();
+    store.save_environment_variables(s, env.id, []).unwrap();
+    let hello_id = json.get_int(steps[1], "id").unwrap();
+    assert_eq(json.get_int(run_step(s, hello_id), "status").unwrap(), 401);
+}

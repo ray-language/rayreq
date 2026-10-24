@@ -19,6 +19,8 @@
 //!   openapi.import {project_id, folder_id, path | text}
 //!                                            → {folder_id, title, requests, folders, warnings}
 //!                                              (read and converted in a fiber)
+//!   runner.plan {project_id, folder_id}     → {name, steps: [{id, name, method, path}]}: what a
+//!                                              run sends, in order (the page sends each one)
 //!   variables {project_id, folder_id | request} → {environment, variables, missing, url, auth}
 //!   tree {project_id}                        → {folders, requests}
 //!   folders.create {project_id, parent_id, name} · folders.rename {id, name}
@@ -45,6 +47,7 @@ import exec;
 import jsonv;
 import model;
 import openapi;
+import runner;
 import store;
 import urls;
 import vars;
@@ -229,6 +232,37 @@ fn tree_json(s: store.Store, project_id: int) -> Result<json.Json, string> {
         requests.push(model.request_summary_json(r));
     }
     Result.Ok(jsonv.obj([("folders", jsonv.arr(folders)), ("requests", jsonv.arr(requests))]))
+}
+
+fn runner_plan(s: store.Store, project_id: int, folder_id: int) -> Result<json.Json, string> {
+    let project = store.get_project(s, project_id)?;
+    let name = if (folder_id == 0) {
+        project.name
+    } else {
+        let f = store.get_folder(s, folder_id)?;
+        if (f.project_id != project_id) {
+            return Result.Err("the folder is not in this project");
+        }
+        f.name
+    };
+    var steps: [json.Json] = [];
+    for st in runner.order(
+        store.list_folders(s, project_id)?,
+        store.list_requests(s, project_id)?,
+        folder_id
+    ) {
+        steps.push(
+            jsonv.obj(
+                [
+                    ("id", jsonv.num(st.request.id)),
+                    ("name", jsonv.str(st.request.name)),
+                    ("method", jsonv.str(st.request.method)),
+                    ("path", jsonv.str(st.path))
+                ]
+            )
+        );
+    }
+    Result.Ok(jsonv.obj([("name", jsonv.str(name)), ("steps", jsonv.arr(steps))]))
 }
 
 fn history_json(items: [store.HistoryItem]) -> json.Json {
@@ -576,6 +610,7 @@ fn dispatch(s: store.Store, req: json.Json, op: string) -> Result<Action, string
         ),
         "cookies.clear" => jsonv.num(store.clear_cookies(s, jsonv.need_int(req, "environment_id")?)?),
         "tree" => tree_json(s, jsonv.need_int(req, "project_id")?)?,
+        "runner.plan" => runner_plan(s, jsonv.need_int(req, "project_id")?, jsonv.get_int(req, "folder_id"))?,
         "folders.create" => model.folder_json(
             store.create_folder(
                 s,

@@ -7,6 +7,7 @@ import { available, call, log } from "./api.js";
 import { initEditor, loadEditor } from "./editor.js";
 import { apply, pickLanguage, setLanguage, t } from "./i18n.js";
 import { initResponse, renderResponse } from "./response.js";
+import { initRunner, openRunner } from "./runner.js";
 import { activeTab, emit, on, state } from "./state.js";
 import { initTabs } from "./tabs.js";
 import { initTree, renderProjects } from "./tree.js";
@@ -89,6 +90,11 @@ function paletteActions() {
     group: t("palette.actions"),
     onSelect: () => A.guard(() => A.askImportCurl()),
   }, {
+    id: "run-folder",
+    label: t("runner.menu"),
+    group: t("palette.actions"),
+    onSelect: () => A.guard(() => openRunner(A.currentFolder())),
+  }, {
     id: "import-openapi",
     label: t("openapi.menu"),
     group: t("palette.actions"),
@@ -134,6 +140,7 @@ function runMenu(tag) {
       case "cookies": return openCookies();
       case "import-curl": return A.askImportCurl();
       case "import-openapi": return A.askImportOpenApi();
+      case "run-folder": return openRunner(A.currentFolder());
       case "copy-curl": return tab && A.copyCurl(tab);
       case "toggle-sidebar": return $("sidebar").toggle();
     }
@@ -175,6 +182,7 @@ async function boot() {
   initEditor();
   initResponse();
   initVariables();
+  initRunner();
   on("tabs", () => showActive());
   on("welcome", renderWelcome);
 

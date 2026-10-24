@@ -5,6 +5,7 @@
 import * as A from "./actions.js";
 import { t } from "./i18n.js";
 import { emit, folderOf, on, requestOf, saveExpanded, state, tabOf, isDirty } from "./state.js";
+import { openRunner } from "./runner.js";
 import { openFolderAuth, openFolderVariables } from "./variables.js";
 import { $, el } from "./util.js";
 
@@ -130,6 +131,7 @@ function fillMenu(node) {
   const items = [];
   if (!node || node.kind === "folder") {
     items.push(menuItem("new-request", "menu.newRequest"), menuItem("new-folder", "menu.newFolder"), menuItem("import-curl", "menu.importCurl"), menuItem("import-openapi", "menu.importOpenApi"));
+    items.push(el("ray-menu-divider"), menuItem("run", node ? "menu.runFolder" : "menu.runAll"));
   }
   if (node) {
     if (items.length) items.push(el("ray-menu-divider"));
@@ -150,6 +152,7 @@ function runMenu(value) {
       case "new-folder": return A.newFolder(folder);
       case "import-curl": return A.askImportCurl(folder);
       case "import-openapi": return A.askImportOpenApi(folder);
+      case "run": return openRunner(folder);
       case "variables": return openFolderVariables(node.id);
       case "auth": return openFolderAuth(node.id);
       case "rename": return A.rename(node);
