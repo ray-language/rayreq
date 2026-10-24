@@ -18,11 +18,11 @@ fn migrations_run_once_and_reopening_keeps_the_data() {
     let dir = fs.make_temp_dir("rayreq-test").unwrap();
     let path = dir + "/rayreq.db";
     let s = store.open(path).unwrap();
-    assert_eq(store.schema_version(s).unwrap(), 6);
+    assert_eq(store.schema_version(s).unwrap(), 7);
     store.create_project(s, "API", "").unwrap();
     store.close_store(s);
     let again = store.open(path).unwrap();
-    assert_eq(store.schema_version(again).unwrap(), 6);
+    assert_eq(store.schema_version(again).unwrap(), 7);
     assert_eq(store.list_projects(again).unwrap().len(), 1);
 }
 

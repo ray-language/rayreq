@@ -33,7 +33,7 @@
 //!   requests.save {request} · requests.rename {id, name} · requests.move {id, folder_id}
 //!   requests.duplicate {id} · requests.delete {id}
 //!   send {run, request}                      → the response (answered when it arrives), with
-//!                                              {unresolved, captures, environment,
+//!                                              {unresolved, captures, assertions, environment,
 //!                                               cookies_stored, cookies_ignored}
 //!   cancel {run}                             → the pending send answers {cancelled: true}
 //!   history.list {request_id} · history.get {id} · history.clear {request_id}
@@ -43,6 +43,7 @@
 import std/fs;
 import std/json;
 import std/time;
+import assertions;
 import auth;
 import captures;
 import cookies;
@@ -80,6 +81,8 @@ pub struct Job {
     environment_id: int,
     environment: string,
     captures: [model.Pair],
+    /// Resolved, with the names each one left unresolved.
+    assertions: [(model.Assertion, [string])],
     unresolved: [string],
     /// An OAuth 2 token to get (or refresh) before sending; the fiber does it.
     oauth: Option<OAuthFetch>,
@@ -467,6 +470,7 @@ pub fn finish(s: store.Store, job: Job, o: exec.Outcome) -> string {
         }
     }
     let captured = captures.apply(s, job.environment_id, job.captures, o);
+    let checked = assertions.check(job.assertions, o);
     let (stored, ignored) = keep_cookies(s, job, o);
     var history_id = 0;
     if (job.request_id > 0) {
@@ -483,6 +487,7 @@ pub fn finish(s: store.Store, job: Job, o: exec.Outcome) -> string {
             [
                 ("unresolved", jsonv.strs(job.unresolved)),
                 ("captures", captures.captured_json(captured)),
+                ("assertions", assertions.checked_json(checked)),
                 ("environment", jsonv.str(job.environment)),
                 ("cookies_stored", jsonv.num(stored)),
                 ("cookies_ignored", jsonv.strs(ignored)),
@@ -779,6 +784,7 @@ fn prepare_send(s: store.Store, req: json.Json) -> Result<Job, string> {
             environment_id: p.scope.environment_id,
             environment: p.scope.environment,
             captures: r.captures,
+            assertions: vars.resolve_assertions(r.assertions, p.scope.vars),
             unresolved: missing,
             oauth: p.oauth,
             token: Option.None
@@ -906,6 +912,7 @@ fn dispatch(s: store.Store, req: json.Json, op: string) -> Result<Action, string
                 r.form = d.form;
                 r.parts = d.parts;
                 r.captures = d.captures;
+                r.assertions = d.assertions;
                 r.auth = d.auth;
                 r.use_cookies = d.use_cookies;
                 r.timeout_ms = d.timeout_ms;

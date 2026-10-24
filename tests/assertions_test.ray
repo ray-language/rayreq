@@ -1,0 +1,211 @@
+// Assertions: what each source reads of a response, how each comparison judges it, and the
+// path from a stored request through `send` to the results in the reply.
+
+import std/fs;
+import std/json;
+import api;
+import assertions;
+import exec;
+import model;
+import store;
+
+fn response(status: int, headers: [(string, string)], body: string) -> exec.Outcome {
+    exec.Outcome {
+        ok: true,
+        error: "",
+        status: status,
+        headers: headers,
+        body: body.to_bytes(),
+        duration_ms: 120,
+        started_at: 0,
+        sent: exec.Sent { method: "GET", url: "http://h/", headers: [], body: b"" },
+        hops: [],
+        set_cookies: []
+    }
+}
+
+const BODY: string = "{\"id\": 12345678901234567890, \"name\": \"Ana\", \"tags\": [\"a\", \"b\"], \"ok\": true, \"none\": null, \"n\": 2.50, \"meta\": {\"page\": 1}}";
+
+fn sample() -> exec.Outcome {
+    response(
+        201,
+        [
+            ("content-type", "application/json; charset=utf-8"),
+            ("set-cookie", "a=1"),
+            ("set-cookie", "b=2")
+        ],
+        BODY
+    )
+}
+
+fn a(source: string, path: string, op: string, expected: string) -> model.Assertion {
+    model.Assertion { source: source, path: path, op: op, expected: expected, enabled: true }
+}
+
+/// The status of one assertion against the sample response.
+fn judged(x: model.Assertion) -> string {
+    let c = assertions.check([(x, [])], sample())[0];
+    c.status
+}
+
+fn result(x: model.Assertion) -> assertions.Checked {
+    assertions.check([(x, [])], sample())[0]
+}
+
+@test
+fn each_source_reads_its_part_of_the_response() {
+    assert_eq(result(a("status", "", "eq", "201")).actual, "201");
+    assert_eq(result(a("time", "", "lt", "500")).actual, "120");
+    assert_eq(result(a("size", "", "eq", "0")).actual, to_string(BODY.len()));
+    // Header names in any case; a repeated header is its values joined.
+    assert_eq(result(a("header", "Set-Cookie", "eq", "")).actual, "a=1, b=2");
+    assert_eq(result(a("body", "", "contains", "Ana")).actual, BODY);
+    // JSON: strings unquoted, numbers as written (no float rounding), the rest compact.
+    assert_eq(result(a("json", "id", "eq", "")).actual, "12345678901234567890");
+    assert_eq(result(a("json", "$.name", "eq", "")).actual, "Ana");
+    assert_eq(result(a("json", "tags", "eq", "")).actual, "[\"a\",\"b\"]");
+    assert_eq(result(a("json", "none", "eq", "")).actual, "null");
+    assert_eq(result(a("json", "meta.page", "eq", "")).actual, "1");
+}
+
+@test
+fn comparisons() {
+    assert_eq(judged(a("status", "", "eq", "201")), "passed");
+    assert_eq(judged(a("status", "", "eq", "200")), "failed");
+    assert_eq(judged(a("status", "", "ne", "200")), "passed");
+    // Numbers compare as numbers: 2.50 = 2.5, and the big id stays exact.
+    assert_eq(judged(a("json", "n", "eq", "2.5")), "passed");
+    assert_eq(judged(a("json", "id", "eq", "12345678901234567890")), "passed");
+    assert_eq(judged(a("json", "id", "eq", "12345678901234567891")), "failed");
+    assert_eq(judged(a("json", "id", "lt", "12345678901234567891")), "passed");
+    assert_eq(judged(a("json", "id", "gt", "-99999999999999999999")), "passed");
+    assert_eq(judged(a("json", "meta.page", "eq", "001")), "passed");
+    assert_eq(judged(a("json", "meta.page", "le", "1.0")), "passed");
+    assert_eq(judged(a("status", "", "ge", "200")), "passed");
+    assert_eq(judged(a("status", "", "lt", "300")), "passed");
+    assert_eq(judged(a("status", "", "gt", "201")), "failed");
+    assert_eq(judged(a("time", "", "le", "120")), "passed");
+    assert_eq(judged(a("json", "name", "gt", "1")), "failed");
+    assert_eq(judged(a("header", "content-type", "contains", "json")), "passed");
+    assert_eq(judged(a("header", "content-type", "not_contains", "xml")), "passed");
+    assert_eq(judged(a("json", "name", "matches", "^A.a$")), "passed");
+    assert_eq(judged(a("body", "", "matches", "\"ok\":\\s*false")), "failed");
+    assert_eq(judged(a("json", "ok", "eq", "true")), "passed");
+    assert_eq(judged(a("json", "none", "eq", "null")), "passed");
+}
+
+@test
+fn presence_and_types() {
+    assert_eq(judged(a("header", "x-missing", "not_exists", "")), "passed");
+    assert_eq(judged(a("header", "content-type", "exists", "")), "passed");
+    assert_eq(judged(a("json", "meta.page", "exists", "")), "passed");
+    assert_eq(judged(a("json", "meta.size", "exists", "")), "failed");
+    assert_eq(judged(a("json", "none", "exists", "")), "passed");
+    assert_eq(judged(a("json", "tags[5]", "not_exists", "")), "passed");
+    assert_eq(judged(a("json", "id", "type", "number")), "passed");
+    assert_eq(judged(a("json", "name", "type", "string")), "passed");
+    assert_eq(judged(a("json", "tags", "type", "array")), "passed");
+    assert_eq(judged(a("json", "meta", "type", "object")), "passed");
+    assert_eq(judged(a("json", "ok", "type", "boolean")), "passed");
+    assert_eq(judged(a("json", "none", "type", "null")), "passed");
+    assert_eq(judged(a("json", "name", "type", "number")), "failed");
+    // A missing value fails every comparison, the negative ones included.
+    let gone = result(a("json", "missing", "ne", "x"));
+    assert_eq((gone.status, gone.detail), ("failed", "not found"));
+    assert_eq(judged(a("header", "x-missing", "not_contains", "x")), "failed");
+}
+
+@test
+fn what_cannot_be_judged_is_an_error() {
+    let cases = [
+        (a("json", "a..b", "eq", "1"), "empty key"),
+        (a("body", "", "matches", "(unclosed"), "bad pattern"),
+        (a("status", "", "lt", "lots"), "not a number"),
+        (a("status", "", "type", "number"), "for JSON values"),
+        (a("json", "id", "type", "integer"), "expected one of"),
+        (a("header", " ", "eq", "x"), "no header name")
+    ];
+    for (x, why) in cases {
+        let c = result(x);
+        assert_eq_msg(c.status, "error", "${x.source} ${x.op}");
+        assert_eq_msg(c.detail.contains(why), true, c.detail);
+    }
+    let text = response(200, [], "not json");
+    assert_eq(
+        assertions.check([(a("json", "x", "exists", ""), [])], text)[0].detail,
+        "the body is not JSON"
+    );
+    var binary = response(200, [], "");
+    binary.body = b"\xff\xfe";
+    assert(
+        assertions.check([(a("body", "", "contains", "x"), [])], binary)[0].detail.contains("UTF-8")
+    );
+    // No response: nothing can be judged.
+    var down = response(0, [], "");
+    down.ok = false;
+    down.error = "connection refused";
+    let c = assertions.check([(a("status", "", "eq", "200"), [])], down)[0];
+    assert_eq((c.status, c.detail), ("error", "no response: connection refused"));
+    // An unresolved variable in the expected value: that assertion only.
+    let u = assertions.check(
+        [(a("status", "", "eq", "{{code}}"), ["code"]), (a("status", "", "eq", "201"), [])],
+        sample()
+    );
+    assert_eq(
+        (u[0].status, u[0].detail, u[1].status),
+        ("error", "unresolved variables: code", "passed")
+    );
+}
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-assert").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+@test
+fn a_send_resolves_and_reports_its_assertions() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = store.active_environment(s, p.id).unwrap().unwrap();
+    store.save_environment_variables(s, env.id, [model.Pair { key: "who", value: "Ana", enabled: true }])
+        .unwrap();
+    var r = model.new_request(p.id, 0, "R");
+    r.url = "http://h/";
+    var off = a("status", "", "eq", "999");
+    off.enabled = false;
+    r.assertions = [a("json", "name", "eq", "{{who}}"), a("status", "", "eq", "{{nope}}"), off];
+    let saved = store.create_request(s, r).unwrap();
+    // Stored and read back as they were, the disabled one included.
+    let back = store.get_request(s, saved.id).unwrap();
+    assert_eq(back.assertions.len(), 3);
+    assert_eq((back.assertions[0].expected, back.assertions[2].enabled), ("{{who}}", false));
+    let body = "{\"op\":\"send\",\"run\":1,\"request\":${json.stringify(model.request_json(back))}}";
+    let job = match (api.handle(s, body)) {
+        api.Action.Send(j) => j,
+        _ => panic("send was not handed to the main loop"),
+    };
+    // A variable only in an assertion is not something the request sends.
+    assert_eq(job.unresolved.len(), 0);
+    let reply = json.parse(api.finish(s, job, sample())).unwrap();
+    let xs = json.get_array(json.member(reply, "value").unwrap(), "assertions").unwrap();
+    assert_eq(xs.len(), 2);
+    assert_eq(
+        (json.get_string(xs[0], "status").unwrap(), json.get_string(xs[0], "expected").unwrap()),
+        ("passed", "Ana")
+    );
+    assert_eq(json.get_string(xs[1], "detail").unwrap(), "unresolved variables: nope");
+}
+
+@test
+fn unknown_sources_and_comparisons_are_refused() {
+    let bad_op = "{\"method\":\"GET\",\"assertions\":[{\"source\":\"status\",\"op\":\"almost\",\"expected\":\"1\"}]}";
+    assert(model.request_of(json.parse(bad_op).unwrap()).is_err());
+    let bad_source = "{\"method\":\"GET\",\"assertions\":[{\"source\":\"vibes\",\"op\":\"eq\"}]}";
+    assert(model.request_of(json.parse(bad_source).unwrap()).is_err());
+    // A stored row this version does not know is dropped, the rest kept.
+    let xs = model.assertions_from_text(
+        "[{\"source\":\"vibes\",\"op\":\"eq\"},{\"source\":\"size\",\"op\":\"lt\",\"expected\":\"10\"}]"
+    );
+    assert_eq(xs.len(), 1);
+    assert_eq(xs[0].source, "size");
+}

@@ -4,6 +4,7 @@
 
 import { notify } from "@raylang/elements";
 import * as A from "./actions.js";
+import { renderResults, tally } from "./assertions.js";
 import { call } from "./api.js";
 import { formatDuration, formatSize, formatTime, t } from "./i18n.js";
 import { activeTab, emit, on } from "./state.js";
@@ -144,6 +145,18 @@ function renderCaptures(r) {
   }
 }
 
+/// The assertions of the send (a response read from the history has none).
+function renderAssertions(r) {
+  const list = r.assertions || [];
+  $("res-assertions-tab").hidden = list.length === 0;
+  const { passed, failed } = tally(list);
+  const badge = $("count-res-assertions");
+  badge.textContent = `${passed}/${list.length}`;
+  badge.color = failed ? "red" : "green";
+  badge.dataset.result = failed ? "failed" : "passed";
+  renderResults($("res-assertions"), list);
+}
+
 async function renderHistory(tab) {
   const box = $("history");
   if (!tab.history) {
@@ -231,6 +244,8 @@ export function renderResponse() {
   }
   renderCaptures(r);
   if (tab.resTab === "captures" && !(r.captures || []).length) tab.resTab = "body";
+  renderAssertions(r);
+  if (tab.resTab === "assertions" && !(r.assertions || []).length) tab.resTab = "body";
   $("copy-body").disabled = !r.ok || !r.text;
   $("save-body").disabled = !r.ok || !r.history_id || r.kind === "empty";
   $("count-res-headers").textContent = String((r.headers || []).length);

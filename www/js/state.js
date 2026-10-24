@@ -2,6 +2,8 @@
 // draft is the request being edited; `saved` is the canonical text of what the store has, so
 // a tab is dirty exactly when the two differ (undoing an edit by hand makes it clean again).
 
+import { cleanAssertions } from "./assertions.js";
+
 export const state = {
   host: null,
   version: "",
@@ -27,7 +29,7 @@ export function emit(name, detail) {
   bus.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-const EDITABLE = ["name", "method", "url", "params", "headers", "body_type", "body", "form", "parts", "captures", "auth", "use_cookies", "timeout_ms", "follow_redirects", "max_redirects"];
+const EDITABLE = ["name", "method", "url", "params", "headers", "body_type", "body", "form", "parts", "captures", "assertions", "auth", "use_cookies", "timeout_ms", "follow_redirects", "max_redirects"];
 const TABLES = ["params", "headers", "form", "captures"];
 
 function cleanPairs(ps) {
@@ -50,6 +52,7 @@ export function canonical(r) {
   for (const k of EDITABLE) {
     if (TABLES.includes(k)) out[k] = cleanPairs(r[k]);
     else if (k === "auth") out[k] = canonicalAuth(r.auth);
+    else if (k === "assertions") out[k] = cleanAssertions(r.assertions);
     else if (k === "parts") out[k] = (r.parts || []).filter((p) => p.key !== "" || p.value !== "")
       .map((p) => [p.key, p.value, p.enabled !== false, Boolean(p.file), p.content_type || ""]);
     else out[k] = r[k];

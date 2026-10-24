@@ -481,7 +481,7 @@ export async function askImportCurl(folderId = currentFolder()) {
 }
 
 /// A curl command pasted into the URL field: it replaces what the open request sends (its
-/// name, place and captures stay).
+/// name, place, captures and assertions stay).
 export async function fillFromCurl(tab, text) {
   const parsed = await call("curl.parse", { text });
   const d = tab.draft;

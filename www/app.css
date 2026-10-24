@@ -90,6 +90,7 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 .kv-row ray-input::part(input) { font-family: var(--ray-font-mono); font-size: var(--ray-font-size-xs); }
 .kv-row.off ray-input { opacity: 0.55; }
 .kv-row .spacer { width: 28px; }
+.kv-row.asserts { grid-template-columns: auto 7rem 1fr 8.5rem 1fr auto; }
 .kv-row.parts { grid-template-columns: auto 1fr 6.5rem 1.4fr 0.8fr auto; }
 .part-value { display: flex; gap: 2px; align-items: center; min-width: 0; }
 .part-value ray-input { flex: 1; min-width: 0; }

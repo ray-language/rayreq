@@ -86,6 +86,7 @@
             <ray-tab value="auth"><span data-i18n="request.auth"></span><ray-badge slot="right" size="xs" variant="dot" color="green" id="has-auth" hidden></ray-badge></ray-tab>
             <ray-tab value="body"><span data-i18n="request.body"></span><ray-badge slot="right" size="xs" variant="dot" id="has-body" hidden></ray-badge></ray-tab>
             <ray-tab value="captures"><span data-i18n="request.captures"></span><ray-badge slot="right" size="xs" color="gray" id="count-captures" hidden></ray-badge></ray-tab>
+            <ray-tab value="assertions"><span data-i18n="request.assertions"></span><ray-badge slot="right" size="xs" color="gray" id="count-assertions" hidden></ray-badge></ray-tab>
             <ray-tab value="variables"><span data-i18n="request.variables"></span><ray-badge slot="right" size="xs" color="orange" id="count-missing" hidden></ray-badge></ray-tab>
             <ray-tab value="settings"><span data-i18n="request.settings"></span></ray-tab>
             <ray-tab-panel value="params"><div id="params" class="kv"></div></ray-tab-panel>
@@ -107,6 +108,10 @@
             <ray-tab-panel value="captures">
               <p class="note" data-i18n="captures.help"></p>
               <div id="captures" class="kv"></div>
+            </ray-tab-panel>
+            <ray-tab-panel value="assertions">
+              <p class="note" data-i18n="assert.help"></p>
+              <div id="assertions" class="kv"></div>
             </ray-tab-panel>
             <ray-tab-panel value="variables">
               <ray-alert id="vars-missing" color="orange" variant="light" hidden></ray-alert>
@@ -159,6 +164,7 @@
               <ray-tab value="headers"><span data-i18n="response.headers"></span><ray-badge slot="right" size="xs" color="gray" id="count-res-headers"></ray-badge></ray-tab>
               <ray-tab value="request"><span data-i18n="response.request"></span></ray-tab>
               <ray-tab value="captures" id="res-captures-tab" hidden><span data-i18n="response.captures"></span><ray-badge slot="right" size="xs" color="gray" id="count-res-captures"></ray-badge></ray-tab>
+              <ray-tab value="assertions" id="res-assertions-tab" hidden><span data-i18n="response.assertions"></span><ray-badge slot="right" size="xs" id="count-res-assertions"></ray-badge></ray-tab>
               <ray-tab value="history"><span data-i18n="response.history"></span></ray-tab>
             <ray-tab-panel value="body">
                 <ray-group gap="xs" class="body-tools" id="body-tools">
@@ -170,6 +176,7 @@
               <ray-tab-panel value="headers"><div id="res-headers"></div></ray-tab-panel>
               <ray-tab-panel value="request"><div id="raw-request"></div></ray-tab-panel>
               <ray-tab-panel value="captures"><div id="res-captures"></div></ray-tab-panel>
+              <ray-tab-panel value="assertions"><div id="res-assertions"></div></ray-tab-panel>
               <ray-tab-panel value="history"><div id="history"></div></ray-tab-panel>
             </ray-tabs>
           </div>

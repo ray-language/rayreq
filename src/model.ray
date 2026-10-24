@@ -24,6 +24,27 @@ pub const MAX_REDIRECTS_LIMIT: int = 50;
 /// nothing (and stops the inheritance for what is below).
 pub const AUTH_KINDS: [string] = ["inherit", "none", "basic", "bearer", "apikey", "oauth2"];
 
+/// What an assertion looks at: the status code, a header (`path` = its name), a value of the
+/// JSON body (`path` = `data.items[0].id`), the whole body as text, the time in ms, the size of
+/// the body in bytes.
+pub const ASSERT_SOURCES: [string] = ["status", "header", "json", "body", "time", "size"];
+
+/// How an assertion compares (assertions.ray).
+pub const ASSERT_OPS: [string] = [
+    "eq",
+    "ne",
+    "lt",
+    "le",
+    "gt",
+    "ge",
+    "contains",
+    "not_contains",
+    "matches",
+    "exists",
+    "not_exists",
+    "type"
+];
+
 /// The OAuth 2 grants rayreq can run (RFC 6749 §4.1 with PKCE, §4.4, §4.3).
 pub const OAUTH_GRANTS: [string] = ["authorization_code", "client_credentials", "password"];
 
@@ -96,6 +117,16 @@ pub struct Part {
     content_type: string,
 }
 
+/// A check on the response of a send. `expected` may hold `{{variables}}` (resolved with the
+/// request's own); `path` only counts for "header" and "json".
+pub struct Assertion {
+    source: string,
+    path: string,
+    op: string,
+    expected: string,
+    enabled: bool,
+}
+
 pub struct Project {
     id: int,
     name: string,
@@ -144,6 +175,8 @@ pub struct Request {
     /// After a 2xx JSON response: `key` = the variable to set in the active environment,
     /// `value` = the path in the body (`data.items[0].id`).
     captures: [Pair],
+    /// Checks on the response; the runner judges a step by them when there are any.
+    assertions: [Assertion],
     auth: Auth,
     /// Send the environment's cookies and keep the ones the response sets.
     use_cookies: bool,
@@ -170,6 +203,7 @@ pub fn new_request(project_id: int, folder_id: int, name: string) -> Request {
         form: [],
         parts: [],
         captures: [],
+        assertions: [],
         auth: auth_of_kind("inherit"),
         use_cookies: true,
         timeout_ms: DEFAULT_TIMEOUT_MS,
@@ -341,6 +375,7 @@ pub fn request_json(r: Request) -> json.Json {
             ("form", pairs_json(r.form)),
             ("parts", parts_json(r.parts)),
             ("captures", pairs_json(r.captures)),
+            ("assertions", assertions_json(r.assertions)),
             ("auth", auth_json(r.auth)),
             ("use_cookies", jsonv.flag(r.use_cookies)),
             ("timeout_ms", jsonv.num(r.timeout_ms)),
@@ -401,6 +436,7 @@ pub fn request_of(j: json.Json) -> Result<Request, string> {
         form: pairs_of(j, "form"),
         parts: parts_of(j, "parts"),
         captures: pairs_of(j, "captures"),
+        assertions: assertions_of(j, "assertions")?,
         auth: match (json.member(j, "auth")) {
             Option.Some(a) => auth_of(a)?,
             Option.None => auth_of_kind("inherit"),
@@ -464,6 +500,69 @@ pub fn parts_from_text(s: string) -> [Part] {
         Result.Ok(j) => parts_of(j, "p"),
         Result.Err(_) => [],
     }
+}
+
+pub fn assertions_json(xs: [Assertion]) -> json.Json {
+    var out: [json.Json] = [];
+    for a in xs {
+        out.push(
+            jsonv.obj(
+                [
+                    ("source", jsonv.str(a.source)),
+                    ("path", jsonv.str(a.path)),
+                    ("op", jsonv.str(a.op)),
+                    ("expected", jsonv.str(a.expected)),
+                    ("enabled", jsonv.flag(a.enabled))
+                ]
+            )
+        );
+    }
+    jsonv.arr(out)
+}
+
+/// The assertions under `key`; an unknown source or comparison is an error.
+pub fn assertions_of(j: json.Json, key: string) -> Result<[Assertion], string> {
+    var out: [Assertion] = [];
+    for item in json.get_array(j, key).unwrap_or([]) {
+        let source = json.get_string(item, "source").unwrap_or("status");
+        if (!ASSERT_SOURCES.contains(source)) {
+            return Result.Err("unsupported assertion source: '${source}'");
+        }
+        let op = json.get_string(item, "op").unwrap_or("eq");
+        if (!ASSERT_OPS.contains(op)) {
+            return Result.Err("unsupported assertion: '${op}'");
+        }
+        out.push(
+            Assertion {
+                source: source,
+                path: jsonv.get_str(item, "path"),
+                op: op,
+                expected: jsonv.get_str(item, "expected"),
+                enabled: jsonv.get_bool(item, "enabled", true)
+            }
+        );
+    }
+    Result.Ok(out)
+}
+
+pub fn assertions_text(xs: [Assertion]) -> string {
+    json.stringify(assertions_json(xs))
+}
+
+/// Assertions stored as JSON text in a column; a row this version does not know is dropped.
+pub fn assertions_from_text(s: string) -> [Assertion] {
+    let j = match (json.parse("{\"p\":" + s + "}")) {
+        Result.Ok(j) => j,
+        Result.Err(_) => return [],
+    };
+    var out: [Assertion] = [];
+    for item in json.get_array(j, "p").unwrap_or([]) {
+        let wrapped = jsonv.obj([("p", jsonv.arr([item]))]);
+        if let Result.Ok(xs) = assertions_of(wrapped, "p") {
+            out = out + xs;
+        }
+    }
+    out
 }
 
 /// Pairs stored as JSON text in a column.

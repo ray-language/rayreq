@@ -1,9 +1,11 @@
 // The collection runner: the saved requests of a folder (or of the whole project) sent one after
 // the other, in the tree's order, with the active environment. Each step is an ordinary send
 // (variables, auth, cookies, captures, history), so a value captured by one request is there for
-// the next. A step passes on 1xx–3xx, fails on 4xx/5xx and is an error when nothing came back.
+// the next. A step with assertions passes when all of them pass; one without passes on 1xx–3xx
+// and fails on 4xx/5xx. Nothing coming back is an error.
 
 import * as A from "./actions.js";
+import { describe, tally } from "./assertions.js";
 import { call } from "./api.js";
 import { t } from "./i18n.js";
 import { emit, nextRun, state, tabOf } from "./state.js";
@@ -92,11 +94,16 @@ function show(row, kind, { status = "", time = "", detail = "" } = {}) {
 function judge(response) {
   if (!response.ok) return { kind: "error", detail: response.error };
   const failedCaptures = (response.captures || []).filter((c) => c.status !== "applied" && c.status !== "skipped_error_status");
+  const checks = response.assertions || [];
+  const { passed, failed } = tally(checks);
   const detail = [
+    ...checks.length ? [t("runner.assertions", { passed, total: checks.length })] : [],
+    ...checks.filter((a) => a.status !== "passed").map((a) => describe(a) + (a.detail ? ` (${a.detail})` : ` (${t("assert.got", { value: a.actual })})`)),
     ...(response.unresolved || []).length ? [t("runner.unresolved", { names: response.unresolved.join(", ") })] : [],
     ...failedCaptures.map((c) => t("runner.capture", { name: c.variable, why: t(`capture.${c.status}`) })),
   ].join(" · ");
-  return { kind: response.status >= 400 ? "failed" : "passed", detail };
+  const kind = checks.length ? (failed ? "failed" : "passed") : response.status >= 400 ? "failed" : "passed";
+  return { kind, detail };
 }
 
 /// Waits `ms`, or less when the run is stopped meanwhile.

@@ -1,16 +1,17 @@
-// The request builder: method, URL, params, headers, body, captures and settings of the active
+// The request builder: method, URL, params, headers, body, captures, assertions and settings of the active
 // tab's draft. Every edit writes the draft, emits "tab" (the tab strip shows the dirty mark) and
 // asks the program again what the draft resolves to (the Variables tab, the resolved URL).
 
 import * as A from "./actions.js";
 import { t } from "./i18n.js";
+import { AssertionsEditor } from "./assertions.js";
 import { AUTH_NAMES, AuthEditor } from "./auth.js";
 import { KvEditor, PartsEditor } from "./kv.js";
 import { activeTab, emit, on, state } from "./state.js";
 import { $, debounce, paramsFromUrl, reindentJson, urlFromParams } from "./util.js";
 import { refreshVariables, refreshVariablesSoon, renderVariables } from "./variables.js";
 
-let params, headers, form, parts, captures, authEditor;
+let params, headers, form, parts, captures, checks, authEditor;
 let loading = false; // set while the fields are filled from a draft: no echo back
 
 function draft() {
@@ -36,6 +37,7 @@ function updateCounts(d) {
   set("count-params", d.params.filter((p) => p.enabled).length);
   set("count-headers", d.headers.filter((h) => h.enabled && h.key).length);
   set("count-captures", (d.captures || []).filter((c) => c.enabled && c.key).length);
+  set("count-assertions", (d.assertions || []).filter((a) => a.enabled).length);
   $("has-body").hidden = d.body_type === "none";
 }
 
@@ -90,6 +92,7 @@ export function loadEditor() {
   form.set(d.form);
   parts.set(d.parts);
   captures.set(d.captures || []);
+  checks.set(d.assertions || []);
   authEditor.set(d.auth);
   authEditor.setInfo("");
   $("body-type").data = bodyTypes();
@@ -195,6 +198,15 @@ export function initEditor() {
       const d = draft();
       if (!d || loading) return;
       d.captures = rows;
+      changed();
+    },
+  });
+
+  checks = new AssertionsEditor($("assertions"), {
+    onChange: (rows) => {
+      const d = draft();
+      if (!d || loading) return;
+      d.assertions = rows;
       changed();
     },
   });

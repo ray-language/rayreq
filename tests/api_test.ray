@@ -156,6 +156,7 @@ fn job(id: int, env: int, caps: [model.Pair]) -> api.Job {
         environment_id: env,
         environment: "E",
         captures: caps,
+        assertions: [],
         unresolved: ["u"],
         oauth: Option.None,
         token: Option.None

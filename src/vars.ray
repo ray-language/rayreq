@@ -318,3 +318,24 @@ fn expand_auth(a: model.Auth, values: Map<string, string>) -> (model.Auth, [stri
     }
     (out, missing)
 }
+
+/// The enabled assertions of a request with the variables of `expected` and `path` replaced, each
+/// with the names it left unresolved (that assertion cannot be judged; the send goes on).
+pub fn resolve_assertions(xs: [model.Assertion], vars: [Var]) -> [(model.Assertion, [string])] {
+    let values = values_of(vars);
+    var out: [(model.Assertion, [string])] = [];
+    for a in xs {
+        if (!a.enabled) {
+            continue;
+        }
+        let (p, mp) = expand(a.path, values);
+        let (e, me) = expand(a.expected, values);
+        out.push(
+            (
+                model.Assertion { source: a.source, path: p, op: a.op, expected: e, enabled: true },
+                add_missing(mp, me)
+            )
+        );
+    }
+    out
+}

@@ -318,6 +318,37 @@ export async function run(port, sampleFile) {
     await A.closeTab(tab3.id);
     A.activate(tab.id);
 
+    // Assertions typed in the editor's rows: one passes, one fails, and the response says which.
+    const urlBefore = tab.draft.url;
+    type($("url"), "{{base}}/echo");
+    const assertRow = (i) => $("assertions").querySelectorAll(".kv-row")[i].children;
+    let [, src, path, op, expected] = assertRow(0);
+    type(src, "json", "change");
+    type(path, "big");
+    type(expected, "12345678901234567890");
+    expect($("assertions").querySelectorAll(".kv-row").length === 2, "a new blank assertion row");
+    [, src, path, op, expected] = assertRow(1);
+    type(src, "header", "change");
+    type(path, "X-Echo");
+    type(op, "ne", "change");
+    type(expected, "{{x}}");
+    expect(tab.draft.assertions.length === 2 && tab.draft.assertions[1].op === "ne" && $("count-assertions").textContent === "2",
+      `assertion rows: ${JSON.stringify(tab.draft.assertions)}`);
+    await A.send(tab);
+    let checks = tab.response.assertions || [];
+    expect(checks.length === 2 && checks[0].status === "passed" && checks[1].status === "passed",
+      `assertions: ${JSON.stringify(checks)}`);
+    type(expected, "1");
+    await A.send(tab);
+    checks = tab.response.assertions || [];
+    expect(checks[1].status === "failed" && checks[1].actual === "1" && !$("res-assertions-tab").hidden
+      && $("count-res-assertions").textContent === "1/2"
+      && $("res-assertions").querySelector('[data-status="failed"]'), `a failing assertion: ${JSON.stringify(checks)}`);
+    assertRow(1)[5].click();
+    assertRow(0)[5].click();
+    expect(tab.draft.assertions.length === 0, "assertion rows removed");
+    type($("url"), urlBefore);
+
     // Runner: the imported API, plus a request that gets a 404, sent in the tree's order.
     const missing = await call("requests.create", { project_id: state.project.id, folder_id: specOut.folder_id, name: "Missing" });
     await call("requests.save", { request: { ...missing, url: "{{baseUrl}}/missing" } });
@@ -340,6 +371,21 @@ export async function run(port, sampleFile) {
     const results2 = runRows().map((r) => r.querySelector("[data-result]")?.dataset.result);
     expect(again.passed === 1 && again.failed === 1 && results2.join() === "passed,skipped,failed", `second run: ${results2}`);
     $("runner-stop-on-failure").checked = false;
+    // With assertions, the 404 is what "Missing" expects: it passes. A failing assertion fails a 2xx.
+    await call("requests.save", { request: { ...missing, url: "{{baseUrl}}/missing", assertions: [
+      { source: "status", path: "", op: "eq", expected: "404", enabled: true },
+      { source: "body", path: "", op: "contains", expected: "no such", enabled: true },
+    ] } });
+    const echoStored = await call("requests.get", { id: echoGet.id });
+    await call("requests.save", { request: { ...echoStored, assertions: [
+      { source: "json", path: "method", op: "eq", expected: "POST", enabled: true },
+    ] } });
+    runRows()[1].querySelector("ray-checkbox").checked = true;
+    const third = await R.run();
+    const results3 = runRows().map((r) => r.querySelector("[data-result]")?.dataset.result);
+    expect(third.passed === 2 && third.failed === 1 && results3.join() === "failed,passed,passed"
+      && runRows()[0].textContent.includes("0/1"), `run with assertions: ${results3} ${runRows()[0].textContent}`);
+    await call("requests.save", { request: { ...echoStored, assertions: [] } });
     $("runner-dialog").close("");
 
     // OAuth 2: client credentials got by the send itself, then the code flow through the token

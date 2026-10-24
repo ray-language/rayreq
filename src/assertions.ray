@@ -1,0 +1,281 @@
+//! Assertions: checks on the response of a send, judged in the main loop when it arrives. Every
+//! enabled assertion reports what it saw; one that cannot be judged (no response, a bad path or
+//! pattern, an unresolved variable) is an "error", never a silent pass.
+//!
+//! Comparisons: `eq`/`ne` compare as numbers when both sides are numbers (`1` = `1.0`), else as
+//! text; `lt`/`le`/`gt`/`ge` need numbers; `contains`, `matches` (a regular expression found
+//! anywhere) and the text forms work on the value as text. A JSON value is its text: a string
+//! unquoted, `null` as `null`, an object or array as compact JSON. `type` (JSON only) expects
+//! string, number, boolean, null, object or array.
+
+import std/json;
+import std/regex;
+import exec;
+import jpath;
+import jsonv;
+import model;
+
+/// `status`: "passed", "failed" or "error" (`detail` says why).
+pub struct Checked {
+    source: string,
+    path: string,
+    op: string,
+    expected: string,
+    actual: string,
+    status: string,
+    detail: string,
+}
+
+/// What a source shows of the response: its text, or None when it is not there (a missing
+/// header or path), or Err when it cannot be read.
+fn actual_of(a: model.Assertion, o: exec.Outcome) -> Result<Option<string>, string> {
+    match (a.source) {
+        "status" => Result.Ok(Option.Some(to_string(o.status))),
+        "time" => Result.Ok(Option.Some(to_string(o.duration_ms))),
+        "size" => Result.Ok(Option.Some(to_string(o.body.len()))),
+        "header" => {
+            let name = a.path.trim().to_lower();
+            if (name == "") {
+                return Result.Err("no header name");
+            }
+            var values: [string] = [];
+            for (k, v) in o.headers {
+                if (k == name) {
+                    values.push(v);
+                }
+            }
+            Result.Ok(
+                if (values.len() == 0) { Option.None } else { Option.Some(values.join(", ")) }
+            )
+        },
+        "body" => match (from_utf8(o.body)) {
+            Result.Ok(t) => Result.Ok(Option.Some(t)),
+            Result.Err(_) => Result.Err("the body is not UTF-8 text"),
+        },
+        _ => {
+            let text = match (from_utf8(o.body)) {
+                Result.Ok(t) => t,
+                Result.Err(_) => return Result.Err("the body is not JSON"),
+            };
+            let path = jpath.parse_path(a.path)?;
+            match (jpath.raw_at(text, path)) {
+                Result.Ok(raw) => Result.Ok(Option.Some(json_text(raw))),
+                Result.Err(jpath.Miss.NotFound) => Result.Ok(Option.None),
+                Result.Err(jpath.Miss.Invalid) => Result.Err("the body is not JSON"),
+            }
+        },
+    }
+}
+
+fn json_text(raw: string) -> string {
+    if (raw.starts_with("\"")) {
+        return match (json.parse(raw)) {
+            Result.Ok(v) => json.as_string(v).unwrap_or(raw),
+            Result.Err(_) => raw,
+        };
+    }
+    if (raw.starts_with("{") || raw.starts_with("[")) {
+        return jpath.compact(raw);
+    }
+    raw
+}
+
+/// The JSON type of the raw value at the path.
+fn json_type(o: exec.Outcome, path: string) -> Result<string, string> {
+    let text = from_utf8(o.body).unwrap_or("");
+    let raw = match (jpath.raw_at(text, jpath.parse_path(path)?)) {
+        Result.Ok(r) => r,
+        Result.Err(_) => return Result.Err("not found"),
+    };
+    Result.Ok(if (raw.starts_with("\"")) {
+        "string"
+    } else if (raw.starts_with("{")) {
+        "object"
+    } else if (raw.starts_with("[")) {
+        "array"
+    } else if (raw == "true" || raw == "false") {
+        "boolean"
+    } else if (raw == "null") {
+        "null"
+    } else {
+        "number"
+    })
+}
+
+fn number(s: string) -> Option<float> {
+    let t = s.trim();
+    if (t == "") {
+        return Option.None;
+    }
+    match (parse_int(t)) {
+        Option.Some(n) => Option.Some(n as float),
+        Option.None => parse_float(t),
+    }
+}
+
+/// An integer of any length as (negative, digits without leading zeros); None if `s` is not one.
+fn integer(s: string) -> Option<(bool, string)> {
+    let t = s.trim();
+    let neg = t.starts_with("-");
+    let digits = if (neg || t.starts_with("+")) { t.substring(1, t.len()) } else { t };
+    if (digits == "" || !regex.full_match("[0-9]+", digits)) {
+        return Option.None;
+    }
+    var i = 0;
+    while (i < digits.len() - 1 && digits.substring(i, i + 1) == "0") {
+        i = i + 1;
+    }
+    let d = digits.substring(i, digits.len());
+    Option.Some((neg && d != "0", d))
+}
+
+/// -1, 0 or 1 when both are numbers. Integers are compared digit by digit (a 64-bit id or a
+/// longer one stays exact), the rest as floats.
+fn compare(x: string, y: string) -> Option<int> {
+    match ((integer(x), integer(y))) {
+        (Option.Some((nx, dx)), Option.Some((ny, dy))) => {
+            if (nx != ny) {
+                return Option.Some(if (nx) { -1 } else { 1 });
+            }
+            let mag = if (dx.len() != dy.len()) {
+                if (dx.len() < dy.len()) { -1 } else { 1 }
+            } else if (dx == dy) {
+                0
+            } else if (dx < dy) {
+                -1
+            } else {
+                1
+            };
+            return Option.Some(if (nx) { -mag } else { mag });
+        },
+        _ => { },
+    }
+    match ((number(x), number(y))) {
+        (Option.Some(a), Option.Some(b)) => Option.Some(if (a < b) {
+            -1
+        } else if (a > b) {
+            1
+        } else {
+            0
+        }),
+        _ => Option.None,
+    }
+}
+
+fn same(actual: string, expected: string) -> bool {
+    actual == expected || compare(actual, expected) == Option.Some(0)
+}
+
+const TYPES: [string] = ["string", "number", "boolean", "null", "object", "array"];
+
+/// Ok(passed) or Err(why it cannot be judged).
+fn judge(a: model.Assertion, o: exec.Outcome, actual: Option<string>) -> Result<bool, string> {
+    let expected = a.expected.trim();
+    if (a.op == "exists" || a.op == "not_exists") {
+        return Result.Ok(actual.is_some() == (a.op == "exists"));
+    }
+    if (a.op == "type") {
+        if (a.source != "json") {
+            return Result.Err("'type' is for JSON values");
+        }
+        if (!TYPES.contains(expected)) {
+            return Result.Err("expected one of ${TYPES.join(", ")}");
+        }
+        if (actual.is_none()) {
+            return Result.Ok(false);
+        }
+        return Result.Ok(json_type(o, a.path)? == expected);
+    }
+    let value = match (actual) {
+        Option.Some(v) => v,
+        // A missing value fails every comparison, ne and not_contains included: they say
+        // something about a value that is not there.
+        Option.None => return Result.Ok(false),
+    };
+    match (a.op) {
+        "eq" => Result.Ok(same(value, expected)),
+        "ne" => Result.Ok(!same(value, expected)),
+        "contains" => Result.Ok(value.contains(a.expected)),
+        "not_contains" => Result.Ok(!value.contains(a.expected)),
+        "matches" => match (regex.compile(a.expected)) {
+            Result.Ok(re) => Result.Ok(re.search(value)),
+            Result.Err(e) => Result.Err("bad pattern: ${e}"),
+        },
+        _ => {
+            if (number(expected).is_none()) {
+                return Result.Err("'${expected}' is not a number");
+            }
+            let c = match (compare(value, expected)) {
+                Option.Some(c) => c,
+                Option.None => return Result.Ok(false),
+            };
+            Result.Ok(match (a.op) {
+                "lt" => c < 0,
+                "le" => c <= 0,
+                "gt" => c > 0,
+                _ => c >= 0,
+            })
+        },
+    }
+}
+
+fn checked(a: model.Assertion, actual: string, status: string, detail: string) -> Checked {
+    Checked {
+        source: a.source,
+        path: a.path.trim(),
+        op: a.op,
+        expected: a.expected,
+        actual: actual,
+        status: status,
+        detail: detail
+    }
+}
+
+/// Judges the resolved assertions of a send (vars.resolve_assertions) against its outcome.
+pub fn check(xs: [(model.Assertion, [string])], o: exec.Outcome) -> [Checked] {
+    var out: [Checked] = [];
+    for (a, missing) in xs {
+        if (missing.len() > 0) {
+            out.push(checked(a, "", "error", "unresolved variables: ${missing.join(", ")}"));
+            continue;
+        }
+        if (!o.ok) {
+            out.push(checked(a, "", "error", "no response: ${o.error}"));
+            continue;
+        }
+        let actual = match (actual_of(a, o)) {
+            Result.Ok(v) => v,
+            Result.Err(e) => {
+                out.push(checked(a, "", "error", e));
+                continue;
+            },
+        };
+        let shown = actual.unwrap_or("");
+        match (judge(a, o, actual)) {
+            Result.Ok(true) => out.push(checked(a, shown, "passed", "")),
+            Result.Ok(false) => out.push(checked(a, shown, "failed", if (actual.is_none()) { "not found" } else { "" })),
+            Result.Err(e) => out.push(checked(a, shown, "error", e)),
+        }
+    }
+    out
+}
+
+pub fn checked_json(cs: [Checked]) -> json.Json {
+    var out: [json.Json] = [];
+    for c in cs {
+        out.push(
+            jsonv.obj(
+                [
+                    ("source", jsonv.str(c.source)),
+                    ("path", jsonv.str(c.path)),
+                    ("op", jsonv.str(c.op)),
+                    ("expected", jsonv.str(c.expected)),
+                    ("actual", jsonv.str(c.actual)),
+                    ("status", jsonv.str(c.status)),
+                    ("detail", jsonv.str(c.detail))
+                ]
+            )
+        );
+    }
+    jsonv.arr(out)
+}

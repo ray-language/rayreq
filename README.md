@@ -6,7 +6,7 @@ folders, saved requests, a response viewer and per-request history. Its model is
 
 ```sh
 make run        # open the app
-make test       # 164 tests: URLs, sending, the store, variables, auth, cookies, cURL, OpenAPI…
+make test       # 170 tests: URLs, sending, the store, variables, auth, cookies, cURL, OpenAPI…
 make check      # the real page driven through a send against a local server
 make            # every target
 ```
@@ -44,6 +44,12 @@ make            # every target
 - **Captures**: after a 2xx JSON response, values at JSON paths (`data.items[0].id`) are written
   into the environment the request was resolved with — as written in the body, so 64-bit ids
   survive — and each capture reports what happened to it.
+- **Tests** (assertions): checks on the response — the status, a header, a value at a JSON path,
+  the body as text, the time or the size — with equals / differs, `<` `≤` `>` `≥`, contains,
+  matches (a regular expression), exists and JSON type. Numbers compare as numbers (and 64-bit
+  ids exactly), expected values take `{{variables}}`, and the response's Tests tab shows what
+  each one saw; one that cannot be judged (no response, a bad path or pattern, an undefined
+  variable) is an error, never a pass.
 - **Auth**: Basic, Bearer or an API key (header or query) per request, or set on a folder for
   every request below that inherits it (the nearest folder with one wins; "No auth" on a folder
   stops the inheritance). Its fields take `{{variables}}` (a captured token in `Bearer
@@ -87,8 +93,9 @@ make            # every target
   tree's menu, sends the saved requests of a folder (or of the project) one after the other in
   the tree's order, with the active environment. Each step is an ordinary send — variables,
   auth, cookies, history — so a token captured by a login step authenticates the ones after
-  it. A step passes on 1xx–3xx and fails on 4xx/5xx; the list shows status, time and what went
-  wrong (an undefined variable, a capture that found nothing). Steps can be unchecked, the run
+  it. A step with tests passes when all of them pass (so an expected 404 passes); one without
+  passes on 1xx–3xx and fails on 4xx/5xx. The list shows status, time and what went wrong (the
+  failed tests and what they got, an undefined variable, a capture that found nothing). Steps can be unchecked, the run
   can stop at the first failure, wait between requests, or be stopped; a step opens its request.
   It uses what is saved: unsaved changes in open tabs are not sent.
 - English and Spanish; light and dark themes; native menus with shortcuts.
@@ -96,8 +103,7 @@ make            # every target
 The rules for variables, and the rikuest bugs they come from, are in
 [docs/VARIABLES.md](docs/VARIABLES.md).
 
-Not yet: assertions on responses (the runner judges by status), OAuth 2's
-device and implicit grants.
+Not yet: OAuth 2's device and implicit grants; test results are not kept in the history.
 
 ## How it is built
 
@@ -117,6 +123,7 @@ src/openapi.ray    OpenAPI 3.x / Swagger 2.0 → folders, requests, variables an
 src/yaml.ray       YAML (the subset API descriptions use) into an ordered tree
 src/node.ray       that ordered tree, JSON in and out (keys in order, numbers as written)
 src/captures.ray   captures: response values into the environment, each with its status
+src/assertions.ray tests on the response: what each source reads, how each comparison judges
 src/jpath.ray      a value at a JSON path, read from the text (numbers as written)
 src/view.ray       an outcome as the page shows it and as the history stores it
 src/store.ray      SQLite: schema migrations, projects, environments, folders, requests,
