@@ -1,0 +1,754 @@
+//! cURL in and out. `parse` reads a curl command line as bash would split it (what browsers'
+//! "Copy as cURL (bash)" and API docs give) into a request draft, with a warning for every part
+//! rayreq cannot keep. `command` writes what a send would put on the wire as a curl command.
+
+import std/url;
+import exec;
+import model;
+import urls;
+
+pub struct Imported {
+    request: model.Request,
+    warnings: [string],
+}
+
+// ---- splitting like bash -------------------------------------------------------------------
+
+fn hex_value(s: string) -> Option<int> {
+    var n = 0;
+    for c in s.to_lower().chars() {
+        let d = char_code(c);
+        let v = if (d >= 48 && d <= 57) { d - 48 } else if (d >= 97 && d <= 102) { d - 87 } else {
+            return Option.None;
+        };
+        n = n * 16 + v;
+    }
+    Option.Some(n)
+}
+
+/// The escapes of `$'…'` (ANSI-C quoting). `cs[i]` is the character after the backslash;
+/// returns the text and how many characters were read.
+fn ansi_escape(cs: [char], i: int) -> (string, int) {
+    let c = cs[i].to_string();
+    let simple = match (c) {
+        "n" => "\n",
+        "t" => "\t",
+        "r" => "\r",
+        "a" => "\u{7}",
+        "b" => "\u{8}",
+        "e" => "\u{1B}",
+        "E" => "\u{1B}",
+        "f" => "\u{C}",
+        "v" => "\u{B}",
+        "\\" => "\\",
+        "'" => "'",
+        "\"" => "\"",
+        "?" => "?",
+        _ => "",
+    };
+    if (simple != "") {
+        return (simple, 1);
+    }
+    let max = if (c == "x") { 2 } else if (c == "u") { 4 } else if (c == "U") { 8 } else { 0 };
+    if (max > 0) {
+        var j = i + 1;
+        var digits = "";
+        while (j < cs.len() && digits.len() < max && hex_value(cs[j].to_string()).is_some()) {
+            digits = digits + cs[j].to_string();
+            j = j + 1;
+        }
+        if let Option.Some(code) = hex_value(digits) {
+            if (digits != "") {
+                if let Option.Some(ch) = char_from_code(code) {
+                    return (ch.to_string(), j - i);
+                }
+            }
+        }
+    }
+    ("\\" + c, 1)
+}
+
+/// The words of a command line, quotes and escapes removed as bash does it: '…' literal,
+/// "…" with \" \\ \$ \` escapes, $'…' with C escapes, backslash-newline continues the line.
+pub fn tokenize(text: string) -> Result<[string], string> {
+    let cs = text.chars();
+    var out: [string] = [];
+    var cur = "";
+    var in_word = false;
+    var i = 0;
+    while (i < cs.len()) {
+        let c = cs[i].to_string();
+        if (c == " " || c == "\t" || c == "\n" || c == "\r") {
+            if (in_word) {
+                out.push(cur);
+                cur = "";
+                in_word = false;
+            }
+            i = i + 1;
+        } else if (c == "\\") {
+            if (i + 1 < cs.len()) {
+                let next = cs[i + 1].to_string();
+                if (next == "\n") {
+                    i = i + 2;
+                } else if (next == "\r" && i + 2 < cs.len() && cs[i + 2].to_string() == "\n") {
+                    i = i + 3;
+                } else {
+                    cur = cur + next;
+                    in_word = true;
+                    i = i + 2;
+                }
+            } else {
+                i = i + 1;
+            }
+        } else if (c == "'") {
+            var j = i + 1;
+            while (j < cs.len() && cs[j].to_string() != "'") {
+                cur = cur + cs[j].to_string();
+                j = j + 1;
+            }
+            if (j >= cs.len()) {
+                return Result.Err("a quote (') is not closed");
+            }
+            in_word = true;
+            i = j + 1;
+        } else if (c == "$" && i + 1 < cs.len() && cs[i + 1].to_string() == "'") {
+            var j = i + 2;
+            var closed = false;
+            while (j < cs.len()) {
+                let d = cs[j].to_string();
+                if (d == "'") {
+                    closed = true;
+                    break;
+                }
+                if (d == "\\" && j + 1 < cs.len()) {
+                    let (text_out, used) = ansi_escape(cs, j + 1);
+                    cur = cur + text_out;
+                    j = j + 1 + used;
+                } else {
+                    cur = cur + d;
+                    j = j + 1;
+                }
+            }
+            if (!closed) {
+                return Result.Err("a quote ($') is not closed");
+            }
+            in_word = true;
+            i = j + 1;
+        } else if (c == "\"") {
+            var j = i + 1;
+            var closed = false;
+            while (j < cs.len()) {
+                let d = cs[j].to_string();
+                if (d == "\"") {
+                    closed = true;
+                    break;
+                }
+                if (d == "\\" && j + 1 < cs.len()) {
+                    let e = cs[j + 1].to_string();
+                    if (e == "\n") {
+                        j = j + 2;
+                        continue;
+                    }
+                    if (e == "\"" || e == "\\" || e == "$" || e == "`") {
+                        cur = cur + e;
+                        j = j + 2;
+                        continue;
+                    }
+                }
+                cur = cur + d;
+                j = j + 1;
+            }
+            if (!closed) {
+                return Result.Err("a quote (\") is not closed");
+            }
+            in_word = true;
+            i = j + 1;
+        } else {
+            cur = cur + c;
+            in_word = true;
+            i = i + 1;
+        }
+    }
+    if (in_word) {
+        out.push(cur);
+    }
+    Result.Ok(out)
+}
+
+// ---- options -------------------------------------------------------------------------------
+
+/// Short options that take an argument (the rest are flags).
+const SHORT_WITH_ARG: string = "XHdubAeFmoTwrxyEKcCzQYUt";
+
+/// Long options that take an argument.
+const LONG_WITH_ARG: [string] = [
+    "request",
+    "header",
+    "data",
+    "data-raw",
+    "data-binary",
+    "data-ascii",
+    "data-urlencode",
+    "json",
+    "form",
+    "form-string",
+    "user",
+    "user-agent",
+    "referer",
+    "cookie",
+    "cookie-jar",
+    "max-time",
+    "connect-timeout",
+    "output",
+    "proxy",
+    "url",
+    "max-redirs",
+    "write-out",
+    "cert",
+    "key",
+    "cacert",
+    "capath",
+    "range",
+    "retry",
+    "retry-delay",
+    "retry-max-time",
+    "config",
+    "resolve",
+    "connect-to",
+    "interface",
+    "limit-rate",
+    "oauth2-bearer",
+    "upload-file",
+    "aws-sigv4",
+    "proxy-user",
+    "dns-servers",
+    "expect100-timeout",
+    "keepalive-time",
+    "local-port",
+    "max-filesize",
+    "noproxy",
+    "proto",
+    "proto-redir",
+    "speed-limit",
+    "speed-time",
+    "time-cond",
+    "trace",
+    "trace-ascii",
+    "unix-socket",
+    "abstract-unix-socket",
+    "variable",
+    "url-query",
+    "header-file",
+    "ciphers",
+    "tls-max",
+    "pinnedpubkey",
+    "service-name",
+    "socks5",
+    "socks5-hostname",
+    "stderr",
+    "dump-header",
+    "cert-type",
+    "key-type",
+    "pass",
+    "engine",
+    "netrc-file",
+    "happy-eyeballs-timeout-ms"
+];
+
+/// Long names of the short options rayreq reads.
+fn long_of(short: string) -> string {
+    match (short) {
+        "X" => "request",
+        "H" => "header",
+        "d" => "data",
+        "u" => "user",
+        "A" => "user-agent",
+        "e" => "referer",
+        "b" => "cookie",
+        "m" => "max-time",
+        "F" => "form",
+        "G" => "get",
+        "I" => "head",
+        "L" => "location",
+        "k" => "insecure",
+        "T" => "upload-file",
+        "o" => "output",
+        _ => "-" + short,
+    }
+}
+
+/// Options that change nothing rayreq sends (output, progress, protocol details it handles).
+const HARMLESS: [string] = [
+    "silent",
+    "show-error",
+    "verbose",
+    "include",
+    "compressed",
+    "output",
+    "fail",
+    "fail-with-body",
+    "globoff",
+    "progress-bar",
+    "no-progress-meter",
+    "http1.1",
+    "http2",
+    "http2-prior-knowledge",
+    "-s",
+    "-S",
+    "-v",
+    "-i",
+    "-f",
+    "-g",
+    "-#",
+    "-N",
+    "no-buffer",
+    "write-out",
+    "-w",
+    "remote-name",
+    "-O",
+    "-J",
+    "remote-header-name",
+    "location-trusted",
+    "path-as-is",
+    "tcp-nodelay",
+    "dump-header",
+    "-D",
+    "styled-output",
+    "no-keepalive",
+    "connect-timeout",
+    "retry",
+    "retry-delay",
+    "retry-max-time",
+    "stderr",
+    "trace",
+    "trace-ascii",
+    "create-dirs",
+    "tr-encoding"
+];
+
+struct Opt {
+    name: string,
+    value: string,
+}
+
+/// The options (long names, "url" for a bare word) of the words after `curl`.
+fn options(words: [string]) -> Result<[Opt], string> {
+    var out: [Opt] = [];
+    var i = 0;
+    var only_urls = false;
+    while (i < words.len()) {
+        let w = words[i];
+        i = i + 1;
+        if (only_urls || !w.starts_with("-") || w == "-") {
+            out.push(Opt { name: "url", value: w });
+            continue;
+        }
+        if (w == "--") {
+            only_urls = true;
+            continue;
+        }
+        if (w.starts_with("--")) {
+            var name = w.substring(2, w.len());
+            var value = "";
+            var has_value = false;
+            if let Option.Some(eq) = name.index_of("=") {
+                value = name.substring(eq + 1, name.len());
+                name = name.substring(0, eq);
+                has_value = true;
+            }
+            if (LONG_WITH_ARG.contains(name) && !has_value) {
+                if (i >= words.len()) {
+                    return Result.Err("--${name} needs a value");
+                }
+                value = words[i];
+                i = i + 1;
+            }
+            out.push(Opt { name: name, value: value });
+            continue;
+        }
+        // -sSL, -XPOST, -H 'a: b'
+        let cs = w.substring(1, w.len()).chars();
+        var k = 0;
+        while (k < cs.len()) {
+            let c = cs[k].to_string();
+            k = k + 1;
+            if (SHORT_WITH_ARG.contains(c)) {
+                var value = w.substring(k + 1, w.len());
+                if (value == "") {
+                    if (i >= words.len()) {
+                        return Result.Err("-${c} needs a value");
+                    }
+                    value = words[i];
+                    i = i + 1;
+                }
+                out.push(Opt { name: long_of(c), value: value });
+                break;
+            }
+            out.push(Opt { name: long_of(c), value: "" });
+        }
+    }
+    Result.Ok(out)
+}
+
+// ---- reading -------------------------------------------------------------------------------
+
+fn pair(k: string, v: string) -> model.Pair {
+    model.Pair { key: k, value: v, enabled: true }
+}
+
+/// The query of a URL as the params table keeps it: as written, not decoded.
+pub fn query_pairs(u: string) -> [model.Pair] {
+    let q = match (u.index_of("?")) {
+        Option.Some(i) => u.substring(i + 1, u.len()).split("#")[0],
+        Option.None => return [],
+    };
+    var out: [model.Pair] = [];
+    for part in q.split(
+        "&"
+    ) {
+        if (part == "") {
+            continue;
+        }
+        match (part.index_of("=")) {
+            Option.Some(i) => out.push(pair(part.substring(0, i), part.substring(i + 1, part.len()))),
+            Option.None => out.push(pair(part, "")),
+        }
+    }
+    out
+}
+
+/// `a=1&b=x+y` as form fields, decoded; None when it does not decode.
+fn form_pairs(body: string) -> Option<[model.Pair]> {
+    var out: [model.Pair] = [];
+    for part in body.split("&") {
+        if (part == "") {
+            continue;
+        }
+        let (k, v) = match (part.index_of("=")) {
+            Option.Some(i) => (part.substring(0, i), part.substring(i + 1, part.len())),
+            Option.None => (part, ""),
+        };
+        let dk = url.url_decode(k).ok()?;
+        let dv = url.url_decode(v).ok()?;
+        out.push(pair(dk, dv));
+    }
+    Option.Some(out)
+}
+
+fn header_value(hs: [model.Pair], name: string) -> Option<string> {
+    for h in hs {
+        if (h.key.to_lower() == name) {
+            return Option.Some(h.value);
+        }
+    }
+    Option.None
+}
+
+fn without_header(hs: [model.Pair], name: string) -> [model.Pair] {
+    var out: [model.Pair] = [];
+    for h in hs {
+        if (h.key.to_lower() != name) {
+            out.push(h);
+        }
+    }
+    out
+}
+
+/// `--data-urlencode` forms: `content`, `=content`, `name=content` (the content is encoded).
+fn urlencode_data(v: string) -> string {
+    match (v.index_of("=")) {
+        Option.Some(0) => url.url_encode(v.substring(1, v.len())),
+        Option.Some(i) => v.substring(0, i) + "=" + url.url_encode(v.substring(i + 1, v.len())),
+        Option.None => url.url_encode(v),
+    }
+}
+
+/// A name for the new request: the method and the last part of the path (or the host).
+fn suggested_name(method: string, u: string) -> string {
+    let full = urls.with_scheme(u);
+    match (urls.parse(full)) {
+        Result.Ok(p) => {
+            let segs = p.path.split("/").filter(fn(s: string) -> bool { s != "" });
+            let last = if (segs.len() == 0) { p.host } else { segs[segs.len() - 1] };
+            "${method} ${last}"
+        },
+        Result.Err(_) => "${method} request",
+    }
+}
+
+/// A curl command as a request draft (no id, no project: the caller places it).
+pub fn parse(text: string) -> Result<Imported, string> {
+    let trimmed = text.trim();
+    if (trimmed.contains("^\"") || trimmed.contains("^\\^")) {
+        return Result.Err(
+            "this is the Windows (cmd) form of the command; copy it as cURL (bash) instead"
+        );
+    }
+    var words = tokenize(trimmed)?;
+    // A shell prompt pasted with it.
+    if (words.len() > 0 && (words[0] == "$" || words[0] == "%")) {
+        words = words.slice(1, words.len());
+    }
+    if (words.len() == 0 || (words[0] != "curl" && words[0] != "curl.exe")) {
+        return Result.Err("not a curl command: it should start with 'curl'");
+    }
+    var r = model.new_request(0, 0, "");
+    var warnings: [string] = [];
+    var urls_seen: [string] = [];
+    var method = "";
+    var data: [string] = [];
+    var json_body = false;
+    var get = false;
+    var head = false;
+    var follow = false;
+    var max_redirs = model.DEFAULT_MAX_REDIRECTS;
+    var headers: [model.Pair] = [];
+    for o in options(
+        words.slice(1, words.len())
+    )? {
+        let n = o.name;
+        let v = o.value;
+        if (n == "url") {
+            urls_seen.push(v);
+        } else if (n == "request") {
+            method = v.to_upper();
+        } else if (n == "header") {
+            match (v.index_of(":")) {
+                Option.Some(i) => {
+                    let k = v.substring(0, i).trim();
+                    let val = v.substring(i + 1, v.len()).trim();
+                    // `-H 'X-Foo:'` removes a header curl would add: nothing to keep here.
+                    if (val != "" || !v.ends_with(":")) {
+                        headers.push(pair(k, val));
+                    }
+                },
+                Option.None => if (v.ends_with(";")) {
+                    // `-H 'X-Empty;'` sends the header with an empty value.
+                    headers.push(pair(v.substring(0, v.len() - 1).trim(), ""));
+                } else if (v.starts_with("@")) {
+                    warnings.push("headers read from a file ('${v}') were not imported");
+                } else {
+                    warnings.push("ignored the header '${v}' (no ':')");
+                },
+            }
+        } else if (n == "data" || n == "data-ascii" || n == "data-binary") {
+            if (v.starts_with("@")) {
+                warnings.push(
+                    "the body comes from the file '${v.substring(1, v.len())}': paste its content into the body"
+                );
+            } else {
+                data.push(v);
+            }
+        } else if (n == "data-raw") {
+            data.push(v);
+        } else if (n == "data-urlencode") {
+            if (v.contains("@") && !v.contains("=") || v.starts_with("@")) {
+                warnings.push(
+                    "the value of --data-urlencode comes from a file ('${v}'): add it by hand"
+                );
+            } else {
+                data.push(urlencode_data(v));
+            }
+        } else if (n == "json") {
+            data.push(v);
+            json_body = true;
+        } else if (n == "form" || n == "form-string") {
+            warnings.push("multipart form fields (-F '${v}') are not supported and were left out");
+        } else if (n == "user") {
+            var a = model.auth_of_kind("basic");
+            match (v.index_of(":")) {
+                Option.Some(i) => {
+                    a.username = v.substring(0, i);
+                    a.password = v.substring(i + 1, v.len());
+                },
+                Option.None => {
+                    a.username = v;
+                    warnings.push(
+                        "curl would ask for the password of '${v}': fill it in the Auth tab"
+                    );
+                },
+            }
+            r.auth = a;
+        } else if (n == "oauth2-bearer") {
+            var a = model.auth_of_kind("bearer");
+            a.token = v;
+            r.auth = a;
+        } else if (n == "user-agent") {
+            headers.push(pair("User-Agent", v));
+        } else if (n == "referer") {
+            headers.push(pair("Referer", v));
+        } else if (n == "cookie") {
+            if (v.contains("=")) {
+                headers.push(pair("Cookie", v));
+            } else {
+                warnings.push("cookies read from the file '${v}' were not imported");
+            }
+        } else if (n == "get") {
+            get = true;
+        } else if (n == "head") {
+            head = true;
+        } else if (n == "location") {
+            follow = true;
+        } else if (n == "max-redirs") {
+            max_redirs = parse_int(v).unwrap_or(model.DEFAULT_MAX_REDIRECTS);
+        } else if (n == "max-time") {
+            match (parse_float(v)) {
+                Option.Some(secs) => r.timeout_ms = (secs * 1000.0) as int,
+                Option.None => warnings.push("ignored --max-time '${v}'"),
+            }
+        } else if (n == "insecure") {
+            warnings.push("-k/--insecure is not supported: certificates are always verified");
+        } else if (n == "url-query") {
+            urls_seen.push("?" + v);
+        } else if (n == "upload-file") {
+            warnings.push("the upload of the file '${v}' (-T) was left out");
+        } else if (!HARMLESS.contains(n)) {
+            warnings.push("ignored the option ${if (n.starts_with("-")) { n } else { "--" + n }}");
+        }
+    }
+    // The URL (a bare `?query` from --url-query joins the first one).
+    var target = "";
+    var extra_query: [string] = [];
+    for x in urls_seen {
+        if (x.starts_with("?")) {
+            extra_query.push(x.substring(1, x.len()));
+        } else if (target == "") {
+            target = x;
+        } else {
+            warnings.push("only the first URL is imported ('${x}' was left out)");
+        }
+    }
+    if (target == "") {
+        return Result.Err("the command has no URL");
+    }
+    let joined = data.join("&");
+    if (get && joined != "") {
+        extra_query.push(joined);
+    }
+    for q in extra_query {
+        target = target + if (target.contains("?")) { "&" } else { "?" } + q;
+    }
+    r.url = target;
+    r.params = query_pairs(target);
+    r.method = if (method != "") {
+        method
+    } else if (head) {
+        "HEAD"
+    } else if (get || data.len() == 0) {
+        "GET"
+    } else {
+        "POST"
+    };
+    if (!model.METHODS.contains(r.method)) {
+        return Result.Err("unsupported method: '${r.method}'");
+    }
+    r.follow_redirects = follow;
+    r.max_redirects = if (max_redirs < 0 || max_redirs > model.MAX_REDIRECTS_LIMIT) {
+        model.MAX_REDIRECTS_LIMIT
+    } else {
+        max_redirs
+    };
+    // The body and its type, from the Content-Type it goes with (curl's default for -d is a
+    // urlencoded form).
+    if (!get && data.len() > 0) {
+        if (json_body) {
+            if (header_value(headers, "content-type").is_none()) {
+                headers.push(pair("Content-Type", "application/json"));
+            }
+            if (header_value(headers, "accept").is_none()) {
+                headers.push(pair("Accept", "application/json"));
+            }
+        }
+        let ctype = header_value(headers, "content-type").unwrap_or(
+            "application/x-www-form-urlencoded"
+        );
+        let low = ctype.to_lower();
+        if (low.starts_with("application/x-www-form-urlencoded")) {
+            match (form_pairs(joined)) {
+                Option.Some(fields) => {
+                    r.body_type = "form";
+                    r.form = fields;
+                    headers = without_header(headers, "content-type");
+                },
+                Option.None => {
+                    r.body_type = "text";
+                    r.body = joined;
+                    if (header_value(headers, "content-type").is_none()) {
+                        headers.push(pair("Content-Type", ctype));
+                    }
+                },
+            }
+        } else {
+            r.body = joined;
+            r.body_type = if (low.contains("json")) {
+                "json"
+            } else if (low.contains("xml")) {
+                "xml"
+            } else {
+                "text"
+            };
+            // The type's own Content-Type is added at send time: keep only a different one.
+            let own = if (r.body_type == "json") {
+                "application/json"
+            } else if (r.body_type == "xml") {
+                "application/xml"
+            } else {
+                ""
+            };
+            if (low == own) {
+                headers = without_header(headers, "content-type");
+            }
+        }
+    }
+    r.headers = headers;
+    r.name = suggested_name(r.method, r.url);
+    Result.Ok(Imported { request: r, warnings: warnings })
+}
+
+// ---- writing -------------------------------------------------------------------------------
+
+/// `s` as one bash word: single quotes, a quote inside written as '\''.
+pub fn quote(s: string) -> string {
+    "'" + s.replace("'", "'\\''") + "'"
+}
+
+/// The send `p` (prepared, variables and auth applied) as a curl command, one option per line.
+/// The defaults rayreq adds on its own (Accept, User-Agent) are left to curl's; `cookie` is
+/// the jar's Cookie header for the URL ("" for none).
+pub fn command(p: exec.Prepared, cookie: string) -> string {
+    var lines: [string] = [];
+    let target = urls.render(p.url);
+    var first = "curl";
+    if (p.method == "HEAD") {
+        first = first + " --head";
+    } else if (!(p.method == "GET" && p.body.len() == 0) && !(p.method == "POST" && p.body.len() > 0)) {
+        first = first + " -X " + p.method;
+    }
+    lines.push(first + " " + quote(target));
+    for (k, v) in p.headers {
+        let low = k.to_lower();
+        if ((low == "accept" && v == "*/*") || (low == "user-agent" && v == exec.USER_AGENT)) {
+            continue;
+        }
+        lines.push("-H " + quote("${k}: ${v}"));
+    }
+    if (cookie != "") {
+        lines.push("-b " + quote(cookie));
+    }
+    if (p.body.len() > 0) {
+        match (from_utf8(p.body)) {
+            Result.Ok(text) => lines.push("--data-raw " + quote(text)),
+            Result.Err(_) => lines.push("--data-binary @body.bin"),
+        }
+    }
+    if (p.follow_redirects) {
+        lines.push("-L --max-redirs ${p.max_redirects}");
+    }
+    if (p.timeout_ms > 0) {
+        let secs = p.timeout_ms / 1000;
+        let ms = p.timeout_ms % 1000;
+        let frac = if (ms == 0) { "" } else { "." + to_string(1000 + ms).substring(1, 4) };
+        lines.push("--max-time ${secs}${frac}");
+    }
+    lines.join(" \\\n  ")
+}

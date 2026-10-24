@@ -1,0 +1,85 @@
+//! Small helpers to build and read `json.Json` values: the page protocol nests objects and
+//! arrays, which the `json.obj()` builder cannot do (it has no raw-JSON field).
+
+import std/json;
+
+pub fn obj(fields: [(string, json.Json)]) -> json.Json {
+    let m: Map<string, json.Json> = Map.new();
+    for (k, v) in fields {
+        m.insert(k, v);
+    }
+    json.Json.JObject(m)
+}
+
+pub fn arr(items: [json.Json]) -> json.Json {
+    json.Json.JArray(items)
+}
+
+pub fn str(v: string) -> json.Json {
+    json.Json.JStr(v)
+}
+
+pub fn num(v: int) -> json.Json {
+    json.Json.JNum(v as float)
+}
+
+pub fn flag(v: bool) -> json.Json {
+    json.Json.JBool(v)
+}
+
+pub fn nil() -> json.Json {
+    json.Json.JNull
+}
+
+pub fn strs(vs: [string]) -> json.Json {
+    var out: [json.Json] = [];
+    for v in vs {
+        out.push(json.Json.JStr(v));
+    }
+    json.Json.JArray(out)
+}
+
+/// `[[k, v], …]`: header lists keep their order and their repeated names.
+pub fn pairs(ps: [(string, string)]) -> json.Json {
+    var out: [json.Json] = [];
+    for (k, v) in ps {
+        out.push(json.Json.JArray([json.Json.JStr(k), json.Json.JStr(v)]));
+    }
+    json.Json.JArray(out)
+}
+
+pub fn get_str(j: json.Json, key: string) -> string {
+    json.get_string(j, key).unwrap_or("")
+}
+
+pub fn get_int(j: json.Json, key: string) -> int {
+    json.get_int(j, key).unwrap_or(0)
+}
+
+pub fn get_bool(j: json.Json, key: string, default: bool) -> bool {
+    json.get_bool(j, key).unwrap_or(default)
+}
+
+pub fn need_str(j: json.Json, key: string) -> Result<string, string> {
+    match (json.get_string(j, key)) {
+        Option.Some(v) => Result.Ok(v),
+        Option.None => Result.Err("missing field '${key}'"),
+    }
+}
+
+pub fn need_int(j: json.Json, key: string) -> Result<int, string> {
+    match (json.get_int(j, key)) {
+        Option.Some(v) => Result.Ok(v),
+        Option.None => Result.Err("missing field '${key}'"),
+    }
+}
+
+pub fn need_obj(j: json.Json, key: string) -> Result<json.Json, string> {
+    match (json.member(j, key)) {
+        Option.Some(v) => match (v) {
+            json.Json.JObject(_) => Result.Ok(v),
+            _ => Result.Err("field '${key}' is not an object"),
+        },
+        Option.None => Result.Err("missing field '${key}'"),
+    }
+}

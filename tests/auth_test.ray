@@ -1,0 +1,220 @@
+// Auth: which one applies (the request's own or the nearest folder's) and what the send gets.
+
+import std/fs;
+import std/json;
+import api;
+import auth;
+import exec;
+import model;
+import store;
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-auth").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+fn pair(k: string, v: string) -> model.Pair {
+    model.Pair { key: k, value: v, enabled: true }
+}
+
+fn bearer(token: string) -> model.Auth {
+    var a = model.auth_of_kind("bearer");
+    a.token = token;
+    a
+}
+
+fn header_of(p: exec.Prepared, name: string) -> string {
+    for (k, v) in p.headers {
+        if (k.to_lower() == name.to_lower()) {
+            return v;
+        }
+    }
+    "<none>"
+}
+
+/// The job `send` would run for the stored request `id`.
+fn job_for(s: store.Store, id: int) -> api.Job {
+    let r = model.request_json(store.get_request(s, id).unwrap());
+    match (api.handle(s, "{\"op\":\"send\",\"run\":1,\"request\":${json.stringify(r)}}")) {
+        api.Action.Send(job) => job,
+        api.Action.Reply(reply) => panic("send was answered at once: ${reply}"),
+        _ => panic("unexpected action"),
+    }
+}
+
+fn request_in(s: store.Store, project_id: int, folder_id: int, a: model.Auth) -> model.Request {
+    var r = model.new_request(project_id, folder_id, "R");
+    r.url = "http://h/x";
+    r.auth = a;
+    store.create_request(s, r).unwrap()
+}
+
+@test
+fn a_request_inherits_from_the_nearest_folder_with_an_auth() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "a").unwrap();
+    let b = store.create_folder(s, p.id, a.id, "b").unwrap();
+    let c = store.create_folder(s, p.id, b.id, "c").unwrap();
+    store.save_folder_auth(s, a.id, bearer("from-a")).unwrap();
+    let r = request_in(s, p.id, c.id, model.auth_of_kind("inherit"));
+    let e = auth.effective(s, r, c.id).unwrap();
+    assert_eq((e.auth.token, e.from, e.source), ("from-a", "folder", "a"));
+    // A deeper folder's own auth is nearer.
+    store.save_folder_auth(s, b.id, bearer("from-b")).unwrap();
+    assert_eq(auth.effective(s, r, c.id).unwrap().auth.token, "from-b");
+    assert_eq(header_of(job_for(s, r.id).prepared, "authorization"), "Bearer from-b");
+}
+
+@test
+fn a_folder_with_none_stops_the_inheritance() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "a").unwrap();
+    let b = store.create_folder(s, p.id, a.id, "public").unwrap();
+    store.save_folder_auth(s, a.id, bearer("secret")).unwrap();
+    store.save_folder_auth(s, b.id, model.auth_of_kind("none")).unwrap();
+    let r = request_in(s, p.id, b.id, model.auth_of_kind("inherit"));
+    let e = auth.effective(s, r, b.id).unwrap();
+    assert_eq((e.auth.kind, e.from, e.source), ("none", "folder", "public"));
+    assert_eq(header_of(job_for(s, r.id).prepared, "authorization"), "<none>");
+}
+
+@test
+fn the_request_own_auth_wins_and_nothing_up_the_chain_is_none() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "a").unwrap();
+    store.save_folder_auth(s, a.id, bearer("folder")).unwrap();
+    let own = request_in(s, p.id, a.id, bearer("own"));
+    assert_eq(auth.effective(s, own, a.id).unwrap().from, "request");
+    assert_eq(header_of(job_for(s, own.id).prepared, "authorization"), "Bearer own");
+    let root = request_in(s, p.id, 0, model.auth_of_kind("inherit"));
+    assert_eq(auth.effective(s, root, 0).unwrap().from, "none");
+}
+
+@test
+fn basic_bearer_and_api_keys_reach_the_wire() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    var basic = model.auth_of_kind("basic");
+    basic.username = "ana";
+    basic.password = "pá:ss";
+    // base64("ana:pá:ss") — UTF-8 bytes.
+    assert_eq(
+        header_of(job_for(s, request_in(s, p.id, 0, basic).id).prepared, "authorization"),
+        "Basic YW5hOnDDoTpzcw=="
+    );
+    var key = model.auth_of_kind("apikey");
+    key.key = "X-Api-Key";
+    key.value = "k1";
+    let job = job_for(s, request_in(s, p.id, 0, key).id);
+    assert_eq(header_of(job.prepared, "x-api-key"), "k1");
+    assert_eq(job.prepared.credentials, ["x-api-key"]);
+    var q = model.auth_of_kind("apikey");
+    q.key = "api key";
+    q.value = "a&b";
+    q.add_to = "query";
+    var r = model.new_request(p.id, 0, "R");
+    r.url = "http://h/x?a=1#frag";
+    r.auth = q;
+    let qj = job_for(s, store.create_request(s, r).unwrap().id);
+    assert_eq(qj.prepared.url.query, "a=1&api%20key=a%26b");
+}
+
+@test
+fn a_header_written_by_hand_wins() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    var r = model.new_request(p.id, 0, "R");
+    r.url = "http://h/x?token=mine";
+    r.headers = [pair("Authorization", "Custom abc")];
+    r.auth = bearer("generated");
+    let job = job_for(s, store.create_request(s, r).unwrap().id);
+    assert_eq(header_of(job.prepared, "authorization"), "Custom abc");
+    var q = model.auth_of_kind("apikey");
+    q.key = "token";
+    q.value = "generated";
+    q.add_to = "query";
+    var r2 = model.new_request(p.id, 0, "R2");
+    r2.url = "http://h/x?token=mine";
+    r2.auth = q;
+    assert_eq(job_for(s, store.create_request(s, r2).unwrap().id).prepared.url.query, "token=mine");
+}
+
+@test
+fn auth_fields_take_variables_and_report_the_missing_ones() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "a").unwrap();
+    let env = store.active_environment(s, p.id).unwrap().unwrap();
+    store.save_environment_variables(s, env.id, [pair("token", "12345678901234567890")]).unwrap();
+    store.save_folder_auth(s, a.id, bearer("{{token}}")).unwrap();
+    let r = request_in(s, p.id, a.id, model.auth_of_kind("inherit"));
+    let job = job_for(s, r.id);
+    assert_eq(header_of(job.prepared, "authorization"), "Bearer 12345678901234567890");
+    assert_eq(job.unresolved.len(), 0);
+    // The stored folder auth is still the template.
+    assert_eq(store.get_folder(s, a.id).unwrap().auth.token, "{{token}}");
+    var basic = model.auth_of_kind("basic");
+    basic.username = "{{user}}";
+    basic.password = "{{token}}";
+    assert_eq(job_for(s, request_in(s, p.id, 0, basic).id).unresolved, ["user"]);
+}
+
+@test
+fn the_variables_op_tells_where_the_auth_comes_from() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "Users").unwrap();
+    store.save_folder_auth(s, a.id, bearer("t")).unwrap();
+    let r = request_in(s, p.id, a.id, model.auth_of_kind("inherit"));
+    let reply = match (api.handle(
+        s,
+        "{\"op\":\"variables\",\"request\":${json.stringify(model.request_json(r))}}"
+    )) {
+        api.Action.Reply(x) => json.member(json.parse(x).unwrap(), "value").unwrap(),
+        _ => panic("expected a reply"),
+    };
+    let a_json = json.member(reply, "auth").unwrap();
+    assert_eq(json.get_string(a_json, "kind").unwrap(), "bearer");
+    assert_eq(json.get_string(a_json, "from").unwrap(), "folder");
+    assert_eq(json.get_string(a_json, "source").unwrap(), "Users");
+}
+
+@test
+fn bad_auth_is_refused() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    assert(model.auth_of(json.parse("{\"kind\":\"digest\"}").unwrap()).is_err());
+    assert(model.auth_of(json.parse("{\"kind\":\"apikey\",\"add_to\":\"body\"}").unwrap())
+        .is_err());
+    let empty = request_in(s, p.id, 0, bearer(""));
+    let body = "{\"op\":\"send\",\"run\":1,\"request\":${json.stringify(model.request_json(empty))}}";
+    match (api.handle(s, body)) {
+        api.Action.Reply(x) => assert(x.contains("Bearer token is empty")),
+        _ => panic("expected a refusal"),
+    }
+    var colon = model.auth_of_kind("basic");
+    colon.username = "a:b";
+    let bad = request_in(s, p.id, 0, colon);
+    match (api.handle(
+        s,
+        "{\"op\":\"send\",\"run\":2,\"request\":${json.stringify(model.request_json(bad))}}"
+    )) {
+        api.Action.Reply(x) => assert(x.contains("cannot contain ':'")),
+        _ => panic("expected a refusal"),
+    }
+}
+
+@test
+fn auth_is_stored_and_duplicated_with_the_request() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let r = request_in(s, p.id, 0, bearer("t"));
+    assert_eq(store.get_request(s, r.id).unwrap().auth.token, "t");
+    assert_eq(store.duplicate_request(s, r.id).unwrap().auth.token, "t");
+    var changed = store.get_request(s, r.id).unwrap();
+    changed.auth = model.auth_of_kind("none");
+    assert_eq(store.save_request(s, changed).unwrap().auth.kind, "none");
+}

@@ -1,0 +1,9 @@
+# dependencies downloaded by the package manager
+.ray-deps/
+node_modules/
+# `ray build --native` / `ray bundle`
+/rayreq
+RayReq.app/
+# `ray dev --device` pairing link (port + secret token)
+.ray-dev
+.DS_Store

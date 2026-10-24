@@ -1,0 +1,450 @@
+// Variables, environments and captures: the nine tests of docs/VARIABLES.md (R1–R8) first,
+// then the edges of the substitution and of the store.
+
+import std/fs;
+import std/json;
+import api;
+import captures;
+import exec;
+import model;
+import store;
+import vars;
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-vars").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+fn pair(k: string, v: string) -> model.Pair {
+    model.Pair { key: k, value: v, enabled: true }
+}
+
+fn active(s: store.Store, project_id: int) -> model.Environment {
+    store.active_environment(s, project_id).unwrap().unwrap()
+}
+
+/// The value of `key` as a request in `folder_id` sees it, and where it came from.
+fn seen(s: store.Store, project_id: int, folder_id: int, key: string) -> (string, string) {
+    for v in vars.scope(s, project_id, folder_id).unwrap().vars {
+        if (v.key == key) {
+            return (v.value, v.kind + ":" + v.source);
+        }
+    }
+    ("<none>", "")
+}
+
+/// A 200 response with a JSON body, as exec.run would return it.
+fn response(status: int, body: string) -> exec.Outcome {
+    exec.Outcome {
+        ok: true,
+        error: "",
+        status: status,
+        headers: [("content-type", "application/json")],
+        body: body.to_bytes(),
+        duration_ms: 1,
+        started_at: 0,
+        sent: exec.Sent { method: "GET", url: "http://h/", headers: [], body: b"" },
+        hops: [],
+        set_cookies: []
+    }
+}
+
+fn header_of(p: exec.Prepared, name: string) -> string {
+    for (k, v) in p.headers {
+        if (k == name) {
+            return v;
+        }
+    }
+    "<none>"
+}
+
+/// The job `send` would run for request `id` (as stored).
+fn job_for(s: store.Store, id: int) -> api.Job {
+    let r = model.request_json(store.get_request(s, id).unwrap());
+    let body = "{\"op\":\"send\",\"run\":1,\"request\":${json.stringify(r)}}";
+    match (api.handle(s, body)) {
+        api.Action.Send(job) => job,
+        api.Action.Reply(reply) => panic("send was answered at once: ${reply}"),
+        _ => panic("unexpected action"),
+    }
+}
+
+// ---- docs/VARIABLES.md: tests to write first -----------------------------------------------
+
+@test
+fn r1_a_root_folder_variable_reaches_three_folders_down() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "a").unwrap();
+    let b = store.create_folder(s, p.id, a.id, "b").unwrap();
+    let c = store.create_folder(s, p.id, b.id, "c").unwrap();
+    store.save_folder_variables(s, a.id, 0, [pair("base", "http://api")]).unwrap();
+    assert_eq(seen(s, p.id, c.id, "base"), ("http://api", "folder:a"));
+}
+
+@test
+fn r2_a_deeper_folder_beats_its_ancestor() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "a").unwrap();
+    let b = store.create_folder(s, p.id, a.id, "b").unwrap();
+    store.save_folder_variables(s, a.id, 0, [pair("x", "from a")]).unwrap();
+    store.save_folder_variables(s, b.id, 0, [pair("x", "from b")]).unwrap();
+    assert_eq(seen(s, p.id, b.id, "x"), ("from b", "folder:b"));
+    assert_eq(seen(s, p.id, a.id, "x"), ("from a", "folder:a"));
+}
+
+@test
+fn r2_the_environment_has_the_last_word_and_switching_matters() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "f").unwrap();
+    store.save_folder_variables(s, f.id, 0, [pair("x", "1")]).unwrap();
+    let dev = active(s, p.id);
+    store.save_environment_variables(s, dev.id, [pair("x", "2")]).unwrap();
+    let bare = store.create_environment(s, p.id, "bare", 0).unwrap();
+    assert_eq(seen(s, p.id, f.id, "x"), ("2", "environment:Default"));
+    store.activate_environment(s, bare.id).unwrap();
+    assert_eq(seen(s, p.id, f.id, "x"), ("1", "folder:f"));
+}
+
+@test
+fn r3_a_folder_override_counts_only_while_its_environment_is_active() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "f").unwrap();
+    let dev = active(s, p.id);
+    let staging = store.create_environment(s, p.id, "staging", 0).unwrap();
+    store.save_folder_variables(s, f.id, 0, [pair("host", "dev.local")]).unwrap();
+    store.save_folder_variables(s, f.id, staging.id, [pair("host", "staging.example")]).unwrap();
+    assert_eq(seen(s, p.id, f.id, "host"), ("dev.local", "folder:f"));
+    store.activate_environment(s, staging.id).unwrap();
+    assert_eq(seen(s, p.id, f.id, "host"), ("staging.example", "folder_override:f"));
+    store.activate_environment(s, dev.id).unwrap();
+    assert_eq(seen(s, p.id, f.id, "host"), ("dev.local", "folder:f"));
+}
+
+@test
+fn r6_a_captured_id_is_sent_exactly_as_written_over_a_folder_default() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "f").unwrap();
+    store.save_folder_variables(s, f.id, 0, [pair("id", "folder-default")]).unwrap();
+    let env = active(s, p.id);
+    let got = captures.apply(
+        s,
+        env.id,
+        [pair("id", "data.id")],
+        response(201, "{\"data\": {\"id\": 12345678901234567890}}")
+    );
+    assert_eq(got[0].status, "applied");
+    var r = model.new_request(p.id, f.id, "next");
+    r.url = "http://h/items/{{id}}";
+    let saved = store.create_request(s, r).unwrap();
+    let job = job_for(s, saved.id);
+    assert_eq(job.prepared.url.path, "/items/12345678901234567890");
+    assert_eq(job.unresolved.len(), 0);
+}
+
+@test
+fn r5_no_active_environment_is_reported_and_changes_nothing() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = active(s, p.id);
+    let got = captures.apply(s, 0, [pair("token", "token")], response(200, "{\"token\":\"t\"}"));
+    assert_eq(got.len(), 1);
+    assert_eq(got[0].status, "no_active_environment");
+    assert_eq(store.environment_variables(s, env.id).unwrap().len(), 0);
+}
+
+@test
+fn r4_an_unresolved_name_is_reported_and_sent_as_written() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    var r = model.new_request(p.id, 0, "R");
+    r.url = "http://h/x";
+    r.headers = [pair("X-Token", "{{missing}}")];
+    let saved = store.create_request(s, r).unwrap();
+    let job = job_for(s, saved.id);
+    assert_eq(job.unresolved, ["missing"]);
+    assert_eq(header_of(job.prepared, "X-Token"), "{{missing}}");
+    // With the setting on, the send is refused with the names.
+    store.set_setting(s, "block_unresolved", "1").unwrap();
+    let body = "{\"op\":\"send\",\"run\":2,\"request\":${json.stringify(model.request_json(saved))}}";
+    match (api.handle(s, body)) {
+        api.Action.Reply(reply) => assert(reply.contains("unresolved variables: missing")),
+        _ => panic("expected a refusal"),
+    }
+}
+
+@test
+fn r7_the_page_list_and_the_send_agree_on_every_value() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "a").unwrap();
+    let b = store.create_folder(s, p.id, a.id, "b").unwrap();
+    let env = active(s, p.id);
+    store.save_folder_variables(s, a.id, 0, [pair("k1", "a1"), pair("k2", "a2"), pair("k3", "a3")])
+        .unwrap();
+    store.save_folder_variables(s, b.id, 0, [pair("k2", "b2")]).unwrap();
+    store.save_folder_variables(s, b.id, env.id, [pair("k3", "b3-env")]).unwrap();
+    store.save_environment_variables(s, env.id, [pair("k4", "e4")]).unwrap();
+    var r = model.new_request(p.id, b.id, "R");
+    r.url = "http://h/";
+    r.headers = [
+        pair("X-k1", "{{k1}}"),
+        pair("X-k2", "{{k2}}"),
+        pair("X-k3", "{{k3}}"),
+        pair("X-k4", "{{k4}}")
+    ];
+    let saved = store.create_request(s, r).unwrap();
+    let job = job_for(s, saved.id);
+    let listed = match (api.handle(
+        s,
+        "{\"op\":\"variables\",\"request\":${json.stringify(model.request_json(saved))}}"
+    )) {
+        api.Action.Reply(reply) => json.member(json.parse(reply).unwrap(), "value").unwrap(),
+        _ => panic("expected a reply"),
+    };
+    let vs = json.get_array(listed, "variables").unwrap();
+    assert_eq(vs.len(), 4);
+    for v in vs {
+        let key = json.get_string(v, "key").unwrap();
+        assert_eq(header_of(job.prepared, "X-" + key), json.get_string(v, "value").unwrap());
+    }
+    assert_eq(seen(s, p.id, b.id, "k1"), ("a1", "folder:a"));
+    assert_eq(seen(s, p.id, b.id, "k2"), ("b2", "folder:b"));
+    assert_eq(seen(s, p.id, b.id, "k3"), ("b3-env", "folder_override:b"));
+    assert_eq(seen(s, p.id, b.id, "k4"), ("e4", "environment:Default"));
+    assert_eq(json.get_array(listed, "missing").unwrap().len(), 0);
+}
+
+@test
+fn r8_a_new_project_has_an_active_environment_and_keeps_one() {
+    let s = fresh();
+    let p = store.create_project_with(s, "P", "", "Predeterminado").unwrap();
+    let envs = store.list_environments(s, p.id).unwrap();
+    assert_eq(envs.len(), 1);
+    assert(envs[0].active);
+    assert_eq(envs[0].name, "Predeterminado");
+    assert(store.delete_environment(s, envs[0].id).is_err());
+    // Deleting the active one of two activates the other.
+    let other = store.create_environment(s, p.id, "other", 0).unwrap();
+    assert(!other.active);
+    store.delete_environment(s, envs[0].id).unwrap();
+    assert_eq(active(s, p.id).id, other.id);
+}
+
+// ---- substitution --------------------------------------------------------------------------
+
+fn values(ps: [(string, string)]) -> Map<string, string> {
+    let m: Map<string, string> = Map.new();
+    for (k, v) in ps {
+        m.insert(k, v);
+    }
+    m
+}
+
+@test
+fn expand_replaces_known_names_and_reports_the_rest_once() {
+    let m = values([("host", "api.example"), ("id", "7")]);
+    assert_eq(
+        vars.expand("https://{{host}}/u/{{id}}?x={{nope}}&y={{nope}}", m),
+        ("https://api.example/u/7?x={{nope}}&y={{nope}}", ["nope"])
+    );
+}
+
+@test
+fn expand_leaves_what_is_not_a_variable_alone() {
+    let m = values([("x", "V")]);
+    assert_eq(vars.expand("{{ x }} {x} {{}} {{x", m), ("{{ x }} {x} {{}} {{x", []));
+    assert_eq(vars.expand("{{{x}}}", m), ("{V}", []));
+    assert_eq(vars.expand("{\"a\":{{x}}}", m), ("{\"a\":V}", []));
+}
+
+@test
+fn expand_does_not_resolve_a_value_again() {
+    let m = values([("a", "{{b}}"), ("b", "no"), ("self", "{{self}}")]);
+    assert_eq(vars.expand("{{a}}", m), ("{{b}}", []));
+    assert_eq(vars.expand("{{self}}", m), ("{{self}}", []));
+}
+
+@test
+fn expand_keeps_text_around_multibyte_characters() {
+    let m = values([("n", "ñandú")]);
+    assert_eq(vars.expand("héllo {{n}} — ok", m), ("héllo ñandú — ok", []));
+}
+
+@test
+fn only_what_is_sent_is_resolved_and_reported() {
+    var r = model.new_request(1, 0, "{{name}}");
+    r.url = "http://h/";
+    r.headers = [model.Pair { key: "X-Off", value: "{{off}}", enabled: false }];
+    r.body_type = "none";
+    r.body = "{{body}}";
+    let (out, missing) = vars.resolve_request(r, []);
+    assert_eq(missing.len(), 0);
+    assert_eq(out.name, "{{name}}");
+    assert_eq(out.headers[0].value, "{{off}}");
+}
+
+@test
+fn a_value_with_spaces_and_ampersands_is_encoded_once() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    store.save_environment_variables(s, active(s, p.id).id, [pair("q", "a b&c")]).unwrap();
+    var r = model.new_request(p.id, 0, "R");
+    r.url = "http://h/search?q={{q}}";
+    let job = job_for(s, store.create_request(s, r).unwrap().id);
+    assert_eq(job.prepared.url.query, "q=a%20b&c");
+}
+
+@test
+fn a_disabled_variable_does_not_hide_the_one_below() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "f").unwrap();
+    store.save_folder_variables(s, f.id, 0, [pair("x", "folder")]).unwrap();
+    store.save_environment_variables(s, active(s, p.id).id, [model.Pair { key: "x", value: "env", enabled: false }])
+        .unwrap();
+    assert_eq(seen(s, p.id, f.id, "x"), ("folder", "folder:f"));
+}
+
+// ---- store ---------------------------------------------------------------------------------
+
+@test
+fn variable_tables_reject_bad_and_repeated_names() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = active(s, p.id);
+    assert(store.save_environment_variables(s, env.id, [pair("a b", "1")]).is_err());
+    assert(store.save_environment_variables(s, env.id, [pair("a", "1"), pair(" a ", "2")])
+        .is_err());
+    let saved = store.save_environment_variables(s, env.id, [pair(" a ", "1"), pair("", "")])
+        .unwrap();
+    assert_eq(saved.len(), 1);
+    assert_eq(saved[0].key, "a");
+}
+
+@test
+fn a_copied_environment_brings_its_variables_and_folder_overrides() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "f").unwrap();
+    let env = active(s, p.id);
+    store.save_environment_variables(s, env.id, [pair("a", "1")]).unwrap();
+    store.save_folder_variables(s, f.id, env.id, [pair("b", "2")]).unwrap();
+    let copy = store.create_environment(s, p.id, "copy", env.id).unwrap();
+    assert_eq(store.environment_variables(s, copy.id).unwrap()[0].value, "1");
+    assert_eq(store.folder_variables(s, f.id, copy.id).unwrap()[0].value, "2");
+}
+
+@test
+fn folder_overrides_stay_within_the_project() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let q = store.create_project(s, "Q", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "f").unwrap();
+    assert(store.save_folder_variables(s, f.id, active(s, q.id).id, [pair("x", "1")]).is_err());
+}
+
+@test
+fn a_capture_updates_in_place_and_reenables() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = active(s, p.id);
+    store.save_environment_variables(s, env.id, [model.Pair { key: "tok", value: "old", enabled: false }, pair("z", "1")])
+        .unwrap();
+    store.set_environment_variable(s, env.id, "tok", "new").unwrap();
+    store.set_environment_variable(s, env.id, "fresh", "f").unwrap();
+    let vs = store.environment_variables(s, env.id).unwrap();
+    assert_eq(vs.len(), 3);
+    assert_eq((vs[0].key, vs[0].value, vs[0].enabled), ("tok", "new", true));
+    assert_eq(vs[2].key, "fresh");
+}
+
+@test
+fn a_migrated_database_gives_every_project_an_environment() {
+    // A phase 1 database: schema 1 with a project and a request.
+    let dir = fs.make_temp_dir("rayreq-vars").unwrap();
+    let path = dir + "/rayreq.db";
+    let s = store.open(path).unwrap();
+    for sql in [
+        "DROP TABLE cookies",
+        "ALTER TABLE requests DROP COLUMN use_cookies",
+        "DROP TABLE folder_variables",
+        "DROP TABLE environment_variables",
+        "DROP TABLE environments",
+        "ALTER TABLE requests DROP COLUMN captures",
+        "ALTER TABLE requests DROP COLUMN auth",
+        "ALTER TABLE folders DROP COLUMN auth",
+        "PRAGMA user_version = 1",
+        "INSERT INTO projects (name, description, created_at, updated_at) VALUES ('Old', '', 1, 1)",
+        "INSERT INTO requests (project_id, name, created_at, updated_at) VALUES (1, 'R', 1, 1)"
+    ] {
+        store.exec(s, sql, []).unwrap();
+    }
+    store.close_store(s);
+    let again = store.open(path).unwrap();
+    assert_eq(store.schema_version(again).unwrap(), 4);
+    let envs = store.list_environments(again, 1).unwrap();
+    assert_eq(envs.len(), 1);
+    assert(envs[0].active);
+    assert_eq(store.get_request(again, 1).unwrap().captures.len(), 0);
+    assert_eq(store.get_request(again, 1).unwrap().auth.kind, "inherit");
+    assert(store.get_request(again, 1).unwrap().use_cookies);
+}
+
+// ---- captures ------------------------------------------------------------------------------
+
+@test
+fn every_capture_reports_its_status() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = active(s, p.id).id;
+    let caps = [
+        pair("a", "a"),
+        pair("gone", "nope.deeper"),
+        pair("bad name", "a"),
+        pair("x", "a[")
+    ];
+    let got = captures.apply(s, env, caps, response(200, "{\"a\": 1}"));
+    assert_eq(got[0].status, "applied");
+    assert_eq(got[1].status, "path_not_found");
+    assert_eq(got[2].status, "failed");
+    assert_eq(got[3].status, "failed");
+    assert_eq(
+        captures.apply(s, env, [pair("a", "a")], response(404, "{\"a\": 2}"))[0].status,
+        "skipped_error_status"
+    );
+    assert_eq(
+        captures.apply(s, env, [pair("a", "a")], response(200, "<html>"))[0].status,
+        "invalid_json"
+    );
+    var down = response(0, "");
+    down.ok = false;
+    down.error = "connection refused";
+    assert_eq(captures.apply(s, env, [pair("a", "a")], down)[0].status, "failed");
+    // Disabled and blank rows are not captures.
+    assert_eq(
+        captures.apply(s, env, [model.Pair { key: "a", value: "a", enabled: false }, pair("", "")], response(200, "{}"))
+            .len(),
+        0
+    );
+    // Only the first apply wrote.
+    assert_eq(store.environment_variables(s, env).unwrap()[0].value, "1");
+}
+
+@test
+fn resolving_leaves_the_template_untouched() {
+    var r = model.new_request(1, 0, "R");
+    r.url = "http://h/{{x}}";
+    r.headers = [pair("A", "{{x}}")];
+    let (out, _) = vars.resolve_request(
+        r,
+        [vars.Var { key: "x", value: "1", kind: "environment", source: "E" }]
+    );
+    assert_eq(out.url, "http://h/1");
+    assert_eq(r.url, "http://h/{{x}}");
+    assert_eq(r.headers[0].value, "{{x}}");
+}

@@ -1,0 +1,243 @@
+// cURL in and out: bash word splitting, the options rayreq keeps (and the warnings for the
+// rest), and commands that a real bash reads back as written.
+
+import std/fs;
+import std/json;
+import std/process;
+import api;
+import curl;
+import exec;
+import model;
+import store;
+
+fn imported(text: string) -> curl.Imported {
+    match (curl.parse(text)) {
+        Result.Ok(i) => i,
+        Result.Err(e) => panic(e),
+    }
+}
+
+fn header_of(r: model.Request, name: string) -> string {
+    for h in r.headers {
+        if (h.key.to_lower() == name.to_lower()) {
+            return h.value;
+        }
+    }
+    "<none>"
+}
+
+@test
+fn words_split_like_bash() {
+    assert_eq(
+        curl.tokenize("curl 'a b' \"c \\\"d\\\" \\$e\" f\\ g h\\\n  i").unwrap(),
+        ["curl", "a b", "c \"d\" $e", "f g", "h", "i"]
+    );
+    assert_eq(curl.tokenize("x $'a\\nb\\'c\\x41\\u00e9'").unwrap(), ["x", "a\nb'cAé"]);
+    assert_eq(curl.tokenize("a'b'\"c\"d").unwrap(), ["abcd"]);
+    assert_eq(curl.tokenize("x ''").unwrap(), ["x", ""]);
+    assert(curl.tokenize("curl 'open").is_err());
+    assert(curl.tokenize("curl \"open").is_err());
+}
+
+@test
+fn a_command_copied_from_a_browser() {
+    let i = imported(`curl 'https://api.example.com/v1/users?page=2&sort=name' \\
+  -H 'accept: application/json' \\
+  -H 'authorization: Bearer abc.def' \\
+  -H 'content-type: application/json' \\
+  --data-raw $'{"name":"Ana","note":"it\\'s"}' \\
+  --compressed`);
+    let r = i.request;
+    assert_eq(i.warnings.len(), 0);
+    assert_eq(r.method, "POST");
+    assert_eq(r.url, "https://api.example.com/v1/users?page=2&sort=name");
+    assert_eq(r.params.len(), 2);
+    assert_eq((r.params[1].key, r.params[1].value), ("sort", "name"));
+    assert_eq(r.body_type, "json");
+    assert_eq(r.body, "{\"name\":\"Ana\",\"note\":\"it's\"}");
+    // application/json is what the JSON type sends anyway; the others stay.
+    assert_eq(header_of(r, "content-type"), "<none>");
+    assert_eq(header_of(r, "authorization"), "Bearer abc.def");
+    assert_eq(r.name, "POST users");
+    // curl does not follow redirects without -L.
+    assert(!r.follow_redirects);
+}
+
+@test
+fn clustered_and_attached_short_options() {
+    let r = imported("curl -sSL -XPUT -H'X-A: 1' -m 2.5 --max-redirs=3 localhost:8080/x").request;
+    assert_eq(r.method, "PUT");
+    assert(r.follow_redirects);
+    assert_eq(r.max_redirects, 3);
+    assert_eq(r.timeout_ms, 2500);
+    assert_eq(header_of(r, "x-a"), "1");
+    assert_eq(r.url, "localhost:8080/x");
+}
+
+@test
+fn data_is_a_form_unless_its_type_says_otherwise() {
+    let r = imported("curl https://h/x -d 'a=1' -d 'b=x+y%21' --data-urlencode 'c=ñ & d'").request;
+    assert_eq((r.method, r.body_type), ("POST", "form"));
+    assert_eq(r.form.len(), 3);
+    assert_eq((r.form[1].key, r.form[1].value), ("b", "x y!"));
+    assert_eq(r.form[2].value, "ñ & d");
+    let xml = imported("curl https://h/x -H 'Content-Type: text/xml' -d '<a/>'").request;
+    assert_eq((xml.body_type, xml.body), ("xml", "<a/>"));
+    assert_eq(header_of(xml, "content-type"), "text/xml");
+    let plain = imported(
+        "curl https://h/x -H 'Content-Type: text/plain' --data-binary 'hi'"
+    ).request;
+    assert_eq(plain.body_type, "text");
+    let j = imported("curl https://h/x --json '{\"a\":1}'").request;
+    assert_eq((j.method, j.body_type), ("POST", "json"));
+    assert_eq(header_of(j, "accept"), "application/json");
+}
+
+@test
+fn get_moves_the_data_to_the_query() {
+    let r = imported("curl -G https://h/search -d q=ray -d n=5").request;
+    assert_eq((r.method, r.body_type), ("GET", "none"));
+    assert_eq(r.url, "https://h/search?q=ray&n=5");
+    assert_eq(r.params.len(), 2);
+    assert_eq(imported("curl -I https://h/").request.method, "HEAD");
+}
+
+@test
+fn credentials_become_the_request_auth() {
+    let basic = imported("curl -u 'ana:pa:ss' https://h/").request.auth;
+    assert_eq((basic.kind, basic.username, basic.password), ("basic", "ana", "pa:ss"));
+    let no_pass = imported("curl -u ana https://h/");
+    assert_eq(no_pass.request.auth.username, "ana");
+    assert_eq(no_pass.warnings.len(), 1);
+    let b = imported("curl --oauth2-bearer tok https://h/").request.auth;
+    assert_eq((b.kind, b.token), ("bearer", "tok"));
+    let c = imported("curl -b 'a=1; b=2' -A agent -e https://ref/ https://h/").request;
+    assert_eq(header_of(c, "cookie"), "a=1; b=2");
+    assert_eq(header_of(c, "user-agent"), "agent");
+    assert_eq(header_of(c, "referer"), "https://ref/");
+}
+
+@test
+fn what_cannot_be_kept_is_warned_about() {
+    let i = imported(
+        "curl -k -F 'f=@a.png' -d @body.json --proxy http://p:3128 https://h/ https://other/"
+    );
+    assert_eq(i.warnings.len(), 5);
+    assert(i.warnings[0].contains("insecure"));
+    assert(i.warnings[1].contains("multipart"));
+    assert(i.warnings[2].contains("body.json"));
+    assert(i.warnings[3].contains("--proxy"));
+    assert(i.warnings[4].contains("https://other/"));
+}
+
+@test
+fn not_a_usable_command() {
+    assert(curl.parse("wget https://h/").is_err());
+    assert(curl.parse("curl -s").is_err());
+    assert(curl.parse("curl -X").is_err());
+    assert(curl.parse("curl -X BREW https://h/").is_err());
+    match (curl.parse("curl ^\"https://h/^\" -H ^\"a: b^\"")) {
+        Result.Err(e) => assert(e.contains("bash")),
+        Result.Ok(_) => panic("accepted the cmd form"),
+    }
+    // A prompt pasted with the command is fine.
+    assert_eq(imported("$ curl https://h/").request.url, "https://h/");
+}
+
+// ---- export --------------------------------------------------------------------------------
+
+/// What bash makes of `word`: the text printf gets.
+fn through_bash(word: string) -> string {
+    let out = process.run("bash", ["-c", "printf %s " + word]).unwrap();
+    from_utf8(out.stdout).unwrap()
+}
+
+@test
+fn quoting_survives_a_real_bash() {
+    for s in ["plain", "it's", "a b\tc\nd", "$HOME `x` \\ \" ' ''", "ñandú {{x}}", ""] {
+        assert_eq(through_bash(curl.quote(s)), s);
+        assert_eq(curl.tokenize("x " + curl.quote(s)).unwrap(), ["x", s]);
+    }
+}
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-curl").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+fn export(s: store.Store, r: model.Request) -> json.Json {
+    let body = "{\"op\":\"curl.export\",\"request\":${json.stringify(model.request_json(r))}}";
+    match (api.handle(s, body)) {
+        api.Action.Reply(x) => {
+            let j = json.parse(x).unwrap();
+            if (!json.get_bool(j, "ok").unwrap_or(false)) {
+                panic(x);
+            }
+            json.member(j, "value").unwrap()
+        },
+        _ => panic("expected a reply"),
+    }
+}
+
+@test
+fn an_export_is_what_the_send_would_do_and_imports_back() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = store.active_environment(s, p.id).unwrap().unwrap();
+    store.save_environment_variables(s, env.id, [model.Pair { key: "host", value: "api.example.com", enabled: true }])
+        .unwrap();
+    var r = model.new_request(p.id, 0, "R");
+    r.method = "PATCH";
+    r.url = "https://{{host}}/users/7?x=a b";
+    r.headers = [model.Pair { key: "X-Note", value: "it's {{missing}}", enabled: true }];
+    r.body_type = "json";
+    r.body = "{\"a\": \"b'c\"}";
+    var a = model.auth_of_kind("bearer");
+    a.token = "tok";
+    r.auth = a;
+    r.timeout_ms = 2500;
+    let saved = store.create_request(s, r).unwrap();
+    let out = export(s, saved);
+    let cmd = json.get_string(out, "command").unwrap();
+    assert_eq(json.get_array(out, "missing").unwrap().len(), 1);
+    assert(cmd.starts_with("curl -X PATCH 'https://api.example.com/users/7?x=a%20b'"));
+    assert(cmd.contains("-H 'Authorization: Bearer tok'"));
+    assert(cmd.contains("--max-time 2.500"));
+    assert(!cmd.contains("User-Agent"));
+    // Back in: the same request, resolved.
+    let back = imported(cmd).request;
+    assert_eq(back.method, "PATCH");
+    assert_eq(back.url, "https://api.example.com/users/7?x=a%20b");
+    assert_eq(back.body, "{\"a\": \"b'c\"}");
+    assert_eq(back.body_type, "json");
+    assert_eq(header_of(back, "x-note"), "it's {{missing}}");
+    assert_eq(header_of(back, "authorization"), "Bearer tok");
+    assert_eq(back.timeout_ms, 2500);
+    assert(back.follow_redirects);
+}
+
+@test
+fn a_form_get_and_head_export_as_curl_would_send_them() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    var f = model.new_request(p.id, 0, "F");
+    f.method = "POST";
+    f.url = "http://h/login";
+    f.body_type = "form";
+    f.form = [model.Pair { key: "user", value: "a b", enabled: true }];
+    f.follow_redirects = false;
+    let cmd = json.get_string(export(s, store.create_request(s, f).unwrap()), "command").unwrap();
+    assert_eq(
+        cmd,
+        "curl 'http://h/login' \\\n  -H 'Content-Type: application/x-www-form-urlencoded' \\\n  --data-raw 'user=a+b' \\\n  --max-time 30"
+    );
+    let back = imported(cmd).request;
+    assert_eq((back.method, back.body_type, back.form[0].value), ("POST", "form", "a b"));
+    var h = model.new_request(p.id, 0, "H");
+    h.method = "HEAD";
+    h.url = "http://h/";
+    h.timeout_ms = 0;
+    assert(json.get_string(export(s, store.create_request(s, h).unwrap()), "command")
+        .unwrap()
+        .starts_with("curl --head 'http://h/'"));
+}

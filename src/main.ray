@@ -1,0 +1,304 @@
+// rayreq: a REST client for the desktop. The page (www/) is plain HTML + ES modules on
+// ray-elements served over ray://app; the program owns the data (SQLite), sends the requests
+// and answers the page through `window.ray.request` (api.ray).
+//
+// One loop owns the window and the database. UI events reach it through a forwarding fiber,
+// and every send runs in a fiber of its own that posts its outcome to the same inbox, so a slow
+// server never freezes the window.
+//
+//   ray run                    open the app (data in the OS data dir; RAYREQ_DATA overrides it)
+//   ray run src/main.ray --check
+//                              open it on a scratch database, drive the page through a send
+//                              against a local server, exit 0/1
+
+import std/fs;
+import std/json;
+import std/ui;
+import elements/bridge;
+import api;
+import exec;
+import menus;
+import openapi;
+import selfcheck;
+import store;
+import view;
+
+const APP_NAME: string = "RayReq";
+
+enum Msg {
+    Ui(ui.UiEvent),
+    /// A send finished: its job and the outcome.
+    Done(api.Job, exec.Outcome),
+    /// An API description was read: the page's request it answers, the job and the result.
+    Spec(Pending, api.SpecJob, Result<openapi.Imported, string>),
+}
+
+/// A send the page is waiting for.
+struct Pending {
+    window: int,
+    reply: int,
+}
+
+/// Where rayreq.db lives: RAYREQ_DATA, else the OS's place for app data.
+fn data_dir() -> Result<string, string> {
+    if let Option.Some(d) = env("RAYREQ_DATA") {
+        return Result.Ok(d);
+    }
+    let os = platform();
+    if (os == "windows") {
+        return match (env("APPDATA")) {
+            Option.Some(a) => Result.Ok(a + "\\RayReq"),
+            Option.None => Result.Err("APPDATA is not set"),
+        };
+    }
+    let home = match (env("HOME")) {
+        Option.Some(h) => h,
+        Option.None => return Result.Err("HOME is not set"),
+    };
+    if (os == "macos") {
+        return Result.Ok(home + "/Library/Application Support/RayReq");
+    }
+    match (env("XDG_DATA_HOME")) {
+        Option.Some(x) => if (x != "") {
+            Result.Ok(x + "/rayreq")
+        } else {
+            Result.Ok(home + "/.local/share/rayreq")
+        },
+        Option.None => Result.Ok(home + "/.local/share/rayreq"),
+    }
+}
+
+/// The menus' language before the page says which one it uses: the stored one, else LANG.
+fn initial_language(s: store.Store) -> string {
+    if let Result.Ok(Option.Some(l)) = store.get_setting(s, "language") {
+        return l;
+    }
+    let lang = env("LANG").unwrap_or("").to_lower();
+    if (lang.starts_with("es")) { "es" } else { "en" }
+}
+
+fn forward(inbox: Channel<Msg>) {
+    let events = ui.events();
+    while (true) {
+        match (recv(events)) {
+            Option.Some(e) => send(inbox, Msg.Ui(e)),
+            Option.None => break,
+        }
+    }
+}
+
+fn run_send(inbox: Channel<Msg>, job: api.Job) {
+    send(inbox, Msg.Done(job, exec.run(job.prepared)));
+}
+
+/// Reading and converting a large description takes seconds: it happens here, and the main
+/// loop only writes the result.
+fn run_spec(inbox: Channel<Msg>, p: Pending, job: api.SpecJob) {
+    send(inbox, Msg.Spec(p, job, api.read_spec(job)));
+}
+
+/// A file name for a saved body: the URL's last segment, with an extension for its kind.
+fn suggested_name(o: exec.Outcome) -> string {
+    let path = o.sent.url.split("?")[0];
+    let last = match (path.last_index_of("/")) {
+        Option.Some(i) => path.substring(i + 1, path.len()),
+        Option.None => "",
+    };
+    let base = if (last == "") { "response" } else { last };
+    if (base.contains(".")) {
+        return base;
+    }
+    let ctype = exec.header_value(o.headers, "content-type").unwrap_or("").to_lower();
+    let ext = match (view.kind_of(ctype, o.body)) {
+        "json" => ".json",
+        "xml" => ".xml",
+        "html" => ".html",
+        "text" => ".txt",
+        "image" => if (ctype.contains("png")) {
+            ".png"
+        } else if (ctype.contains("jpeg")) {
+            ".jpg"
+        } else if (ctype.contains("gif")) {
+            ".gif"
+        } else if (ctype.contains("svg")) {
+            ".svg"
+        } else if (ctype.contains("webp")) {
+            ".webp"
+        } else {
+            ""
+        },
+        _ => ".bin",
+    };
+    base + ext
+}
+
+fn save_body(s: store.Store, history_id: int) -> Result<json.Json, string> {
+    let o = view.outcome_of_record(store.history_record(s, history_id)?)?;
+    var opts = ui.file_options();
+    opts.suggested = suggested_name(o);
+    match (ui.save_file_with(opts)?) {
+        Option.Some(path) => {
+            fs.write_file_bytes(path, o.body)?;
+            Result.Ok(json.Json.JStr(path))
+        },
+        Option.None => Result.Ok(json.Json.JNull),
+    }
+}
+
+fn reply(window: int, id: int, body: string) {
+    if let Result.Err(e) = ui.reply_json(window, id, body) {
+        eprint("rayreq: reply: " + e);
+    }
+}
+
+fn page_url() -> Result<string, string> {
+    let url = ui.app_url("app://index.html");
+    if (url.starts_with("ray://")) {
+        let files = ui.mount_embed_at("", "www")?;
+        if (files == 0) {
+            return Result.Err("no embedded page under www/");
+        }
+    }
+    Result.Ok(url)
+}
+
+fn run(check: bool) -> Result<int, string> {
+    let dir = if (check) { fs.make_temp_dir("rayreq-check")? } else { data_dir()? };
+    fs.mkdir(dir)?;
+    let s = store.open(dir + "/rayreq.db")?;
+    // Session cookies end with the session, as in a browser.
+    store.end_cookie_session(s)?;
+    let native = bridge.system();
+    let lang = initial_language(s);
+    let titles = menus.install(native, lang)?;
+
+    var url = page_url()?;
+    if (check) {
+        url = url + "?check=" + to_string(selfcheck.start_server()?);
+    }
+    var o = ui.options(1280, 820);
+    o.min_width = 860;
+    o.min_height = 540;
+    o.kind = "full_content";
+    if (!check) {
+        o.autosave = "rayreq.main";
+    }
+    let window = ui.open_with(APP_NAME, url, o)?;
+    // Closing with unsaved tabs asks first: the page decides, then sends "quit".
+    ui.intercept_close(window, true)?;
+    ui.intercept_quit(true)?;
+
+    let inbox: Channel<Msg> = Channel.bounded(1024);
+    let _forwarder = spawn(fn() {
+        forward(inbox);
+    });
+    let pending: Map<int, Pending> = Map.new();
+    let ask_quit = "window.rayreq ? window.rayreq.requestQuit() : window.ray.request({op: 'quit'})";
+
+    while (true) {
+        let msg = match (recv(inbox)) {
+            Option.Some(m) => m,
+            Option.None => return Result.Ok(1),
+        };
+        match (msg) {
+            Msg.Done(job, outcome) => {
+                // Gone = cancelled: the page was already answered (and nothing is captured).
+                if let Option.Some(p) = pending.get(job.run) {
+                    pending.remove(job.run);
+                    reply(p.window, p.reply, api.finish(s, job, outcome));
+                }
+            },
+            Msg.Spec(p, job, imported) => reply(p.window, p.reply, api.store_spec(s, job, imported)),
+            Msg.Ui(raw) => {
+                let e = match (bridge.route(native, raw)) {
+                    Option.Some(e) => e,
+                    Option.None => continue,  // a ray-elements request, already answered
+                };
+                if (e.kind == "closed") {
+                    return Result.Ok(0);
+                }
+                if (e.kind == "close_requested" || e.kind == "quit_requested") {
+                    ui.eval_js(window, ask_quit)?;
+                    continue;
+                }
+                if (e.kind == "menu") {
+                    // Our tags are plain words; json.stringify quotes them for JS anyway.
+                    let tag = json.stringify(json.Json.JStr(e.tag));
+                    ui.eval_js(window, "window.rayreq && window.rayreq.menu(${tag})")?;
+                    continue;
+                }
+                if (e.kind != "message") {
+                    continue;
+                }
+                let (id, body) = match (ui.as_request(e)) {
+                    Option.Some(r) => r,
+                    Option.None => {
+                        if (check) {
+                            // The self-check reports through window.ray.send.
+                            match (selfcheck.verdict(e.tag)) {
+                                Option.Some(code) => {
+                                    close(window);
+                                    return Result.Ok(code);
+                                },
+                                Option.None => print(e.tag),
+                            }
+                        }
+                        continue;
+                    },
+                };
+                let target = if (e.window == 0) { window } else { e.window };
+                match (api.handle(s, body)) {
+                    api.Action.Reply(r) => reply(target, id, r),
+                    api.Action.Send(job) => {
+                        pending.insert(job.run, Pending { window: target, reply: id });
+                        let _t = spawn(fn() {
+                            run_send(inbox, job);
+                        });
+                    },
+                    api.Action.Cancel(run_id) => {
+                        if let Option.Some(p) = pending.get(run_id) {
+                            pending.remove(run_id);
+                            reply(p.window, p.reply, api.cancelled());
+                        }
+                        reply(target, id, api.ok(json.Json.JBool(true)));
+                    },
+                    api.Action.SaveBody(history_id) => match (save_body(s, history_id)) {
+                        Result.Ok(v) => reply(target, id, api.ok(v)),
+                        Result.Err(err) => reply(target, id, api.fail(err)),
+                    },
+                    api.Action.Language(l) => {
+                        if let Result.Err(err) = menus.relabel(native, titles, l) {
+                            eprint("rayreq: menus: " + err);
+                        }
+                        reply(target, id, api.ok(json.Json.JBool(true)));
+                    },
+                    api.Action.Clipboard(text) => match (ui.clipboard_write(text)) {
+                        Result.Ok(_) => reply(target, id, api.ok(json.Json.JBool(true))),
+                        Result.Err(err) => reply(target, id, api.fail(err)),
+                    },
+                    api.Action.ImportSpec(job) => {
+                        let p = Pending { window: target, reply: id };
+                        let _t = spawn(fn() {
+                            run_spec(inbox, p, job);
+                        });
+                    },
+                    api.Action.Quit => {
+                        reply(target, id, api.ok(json.Json.JBool(true)));
+                        close(window);
+                        return Result.Ok(0);
+                    },
+                }
+            },
+        }
+    }
+}
+
+fn main() -> int {
+    match (run(args().contains("--check"))) {
+        Result.Ok(code) => code,
+        Result.Err(e) => {
+            eprint("rayreq: " + e);
+            1
+        },
+    }
+}

@@ -1,0 +1,65 @@
+//! `--check`: the app on a scratch database, with a local echo server for the page's scripted
+//! run (www/check.js). The page reports with `window.ray.send("check:ok")` or
+//! `"check:fail:<why>"`; a watchdog ends the run if it never does.
+
+import std/json;
+import std/net;
+import std/time;
+import net/webserver;
+
+const WATCHDOG_MS: int = 30000;
+
+fn echo(req: webserver.Request) -> webserver.Response {
+    if (req.path == "/redirect") {
+        var r = webserver.text(302, "");
+        r.headers.insert("Location", "/echo?from=redirect");
+        return r;
+    }
+    if (req.path == "/login") {
+        var r = webserver.text(302, "");
+        r.headers.insert("Location", "/echo?from=login");
+        r.set_cookie.push("sid=abc; Path=/; HttpOnly");
+        return r;
+    }
+    if (req.path == "/slow") {
+        time.sleep(5000);
+        return webserver.text(200, "late");
+    }
+    // The credentials it got, as JSON strings (quotes escaped).
+    let auth = json.stringify(json.Json.JStr(req.headers.get_or("authorization", "")));
+    let key = json.stringify(json.Json.JStr(req.headers.get_or("x-api-key", "")));
+    let cookie = json.stringify(json.Json.JStr(req.headers.get_or("cookie", "")));
+    let body = "{\"method\":\"${req.method}\",\"path\":\"${req.raw_path}\",\"query\":\"${req.query}\",\"size\":${req.body.len()},\"big\":12345678901234567890,\"auth\":${auth},\"key\":${key},\"cookie\":${cookie}}";
+    var r = webserver.json_response(body);
+    r.headers.insert("X-Echo", "1");
+    r
+}
+
+/// Starts the echo server on a free port (port 0) and the watchdog; returns the port.
+pub fn start_server() -> Result<int, string> {
+    let l = net.tcp_listen("127.0.0.1", 0)?;
+    let port = net.local_port(l);
+    let _server = spawn(fn() {
+        let _ = webserver.serve_options_on(l, webserver.options()
+            .quiet(), fn() -> fn(webserver.Request) -> webserver.Response { echo });
+    });
+    let _watchdog = spawn(fn() {
+        time.sleep(WATCHDOG_MS);
+        eprint("rayreq: check failed: the page did not report in ${WATCHDOG_MS / 1000} s");
+        exit(1);
+    });
+    Result.Ok(port)
+}
+
+/// The exit code a page message stands for, or None when it is not a verdict.
+pub fn verdict(tag: string) -> Option<int> {
+    if (tag == "check:ok") {
+        print("rayreq: check ok");
+        return Option.Some(0);
+    }
+    if (tag.starts_with("check:fail:")) {
+        eprint("rayreq: check failed: " + tag.substring(11, tag.len()));
+        return Option.Some(1);
+    }
+    Option.None
+}

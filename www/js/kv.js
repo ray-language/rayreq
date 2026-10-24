@@ -1,0 +1,97 @@
+// A key/value table (params, headers, form fields): a checkbox, the key, the value and a
+// remove button per row, and always one blank row at the end to type a new one. Typing never
+// re-renders the rows (the focus stays put); set() does, for changes made from outside.
+
+import { el } from "./util.js";
+import { t } from "./i18n.js";
+
+export class KvEditor {
+  /// keyLabel / valueLabel: the i18n keys of the two columns ("kv.key", "kv.header", "kv.field",
+  /// "kv.variable"; "kv.value", "kv.path").
+  constructor(container, { keyLabel = "kv.key", valueLabel = "kv.value", onChange = () => {} } = {}) {
+    this.container = container;
+    this.keyLabel = keyLabel;
+    this.valueLabel = valueLabel;
+    this.onChange = onChange;
+    this.rows = [];
+    this.render();
+  }
+
+  /// The rows without the trailing blank one.
+  get value() {
+    return this.rows.filter((r) => r.key !== "" || r.value !== "").map((r) => ({ ...r }));
+  }
+
+  set(rows) {
+    this.rows = (rows || []).map((r) => ({ key: r.key, value: r.value, enabled: r.enabled !== false }));
+    this.render();
+  }
+
+  count() {
+    return this.value.filter((r) => r.enabled).length;
+  }
+
+  render() {
+    this.container.replaceChildren();
+    for (const row of this.rows) this.container.append(this.rowElement(row));
+    this.addBlank();
+  }
+
+  addBlank() {
+    const blank = { key: "", value: "", enabled: true };
+    this.rows.push(blank);
+    this.container.append(this.rowElement(blank, true));
+  }
+
+  changed() {
+    this.onChange(this.value);
+  }
+
+  rowElement(row, isBlank = false) {
+    const line = el("div", { class: "kv-row" + (row.enabled ? "" : " off") });
+    const box = el("ray-checkbox", { "aria-label": t("kv.enabled") });
+    box.checked = row.enabled;
+    const key = el("ray-input", { size: "xs", placeholder: t(this.keyLabel), "aria-label": t(this.keyLabel), spellcheck: "false", autocapitalize: "off" });
+    key.value = row.key;
+    const value = el("ray-input", { size: "xs", placeholder: t(this.valueLabel), "aria-label": t(this.valueLabel), spellcheck: "false", autocapitalize: "off" });
+    value.value = row.value;
+    const remove = el("ray-icon-button", { size: "sm", variant: "subtle", label: t("kv.remove") }, el("ray-icon", { name: "close" }));
+
+    let blank = isBlank;
+    const touch = () => {
+      // The first keystroke in the blank row makes it a real one and adds a new blank.
+      if (blank && (row.key !== "" || row.value !== "")) {
+        blank = false;
+        remove.style.visibility = "";
+        box.style.visibility = "";
+        this.addBlank();
+      }
+      this.changed();
+    };
+    key.addEventListener("input", () => { row.key = key.value; touch(); });
+    value.addEventListener("input", () => { row.value = value.value; touch(); });
+    box.addEventListener("change", () => {
+      row.enabled = box.checked;
+      line.classList.toggle("off", !row.enabled);
+      this.changed();
+    });
+    remove.addEventListener("click", () => {
+      this.rows.splice(this.rows.indexOf(row), 1);
+      line.remove();
+      this.changed();
+    });
+    // Enter in a key or value does nothing: it would submit the URL bar's form otherwise.
+    for (const input of [key, value]) {
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") e.preventDefault();
+      });
+    }
+    // The blank row keeps its grid cells (visibility, not hidden) so the columns line up.
+    if (isBlank) {
+      remove.style.visibility = "hidden";
+      box.style.visibility = "hidden";
+    }
+    line.append(box, key, value, remove);
+    return line;
+  }
+}

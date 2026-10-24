@@ -1,0 +1,310 @@
+//! An `exec.Outcome` as the page shows it (`present`) and as the history stores it (`record`,
+//! `outcome_of_record`). Bodies are bytes end to end: text is decoded only to show it, and a
+//! body that is not UTF-8 is never turned into a string (it is shown as binary and can be
+//! saved as it came).
+
+import std/base64;
+import std/json;
+import exec;
+import jsonv;
+
+/// The page gets at most this much text; the rest is reachable through "Save body".
+pub const DISPLAY_LIMIT: int = 2 * 1024 * 1024;
+
+/// The history keeps bodies up to this size (larger ones are cut, and marked so).
+pub const STORE_LIMIT: int = 5 * 1024 * 1024;
+
+/// The sent body shown in the "raw request" view.
+pub const SENT_LIMIT: int = 64 * 1024;
+
+/// Images up to this size are previewed inline.
+pub const IMAGE_LIMIT: int = 4 * 1024 * 1024;
+
+pub fn status_text(code: int) -> string {
+    match (code) {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
+        204 => "No Content",
+        205 => "Reset Content",
+        206 => "Partial Content",
+        300 => "Multiple Choices",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        407 => "Proxy Authentication Required",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Content Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
+        417 => "Expectation Failed",
+        418 => "I'm a teapot",
+        422 => "Unprocessable Content",
+        425 => "Too Early",
+        426 => "Upgrade Required",
+        428 => "Precondition Required",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        451 => "Unavailable For Legal Reasons",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        505 => "HTTP Version Not Supported",
+        _ => "",
+    }
+}
+
+/// `json` · `xml` · `html` · `image` · `text` · `binary` · `empty`, from the Content-Type and,
+/// when it says nothing useful, from the bytes.
+pub fn kind_of(content_type: string, body: bytes) -> string {
+    if (body.len() == 0) {
+        return "empty";
+    }
+    let ct = content_type.to_lower();
+    if (ct.contains("json")) {
+        return "json";
+    }
+    if (ct.contains("html")) {
+        return "html";
+    }
+    if (ct.contains("xml")) {
+        return "xml";
+    }
+    if (ct.starts_with("image/")) {
+        return "image";
+    }
+    let text = from_utf8(body);
+    if (text.is_err()) {
+        return "binary";
+    }
+    if (ct.starts_with("text/")
+        || ct.contains("javascript")
+        || ct.contains("x-www-form-urlencoded")) {
+        return "text";
+    }
+    // No type, or a generic one: look at the content.
+    let t = text.unwrap_or("").trim();
+    if ((t.starts_with("{") || t.starts_with("[")) && json.parse(t).is_ok()) {
+        return "json";
+    }
+    if (t.starts_with("<")) {
+        return if (t.to_lower().contains("<html")) { "html" } else { "xml" };
+    }
+    "text"
+}
+
+/// The JSON indented by two spaces, numbers and key order untouched (`json.reindent` works on
+/// the text); None when it does not parse.
+pub fn pretty_json(text: string) -> Option<string> {
+    if (json.parse(text).is_err()) {
+        return Option.None;
+    }
+    Option.Some(json.reindent(text.trim(), 2))
+}
+
+fn hops_json(hops: [exec.Hop]) -> json.Json {
+    var out: [json.Json] = [];
+    for h in hops {
+        out.push(
+            jsonv.obj(
+                [
+                    ("status", jsonv.num(h.status)),
+                    ("method", jsonv.str(h.method)),
+                    ("url", jsonv.str(h.url)),
+                    ("location", jsonv.str(h.location))
+                ]
+            )
+        );
+    }
+    jsonv.arr(out)
+}
+
+fn text_prefix(body: bytes, limit: int) -> (string, bool) {
+    if (body.len() <= limit) {
+        return (from_utf8(body).unwrap_or(""), false);
+    }
+    // Cut on a character boundary: back off over UTF-8 continuation bytes (10xxxxxx).
+    var end = limit;
+    while (end > 0 && (body[end] & 192) == 128) {
+        end = end - 1;
+    }
+    (from_utf8(body.sub_bytes(0, end)).unwrap_or(""), true)
+}
+
+/// What the response pane needs. `history_id` lets the page ask for the body later (save it).
+pub fn present(o: exec.Outcome, history_id: int) -> json.Json {
+    present_with(o, history_id, [])
+}
+
+/// `present` plus fields of the send that are not part of the exchange (captures, unresolved
+/// variables).
+pub fn present_with(o: exec.Outcome, history_id: int, extra: [(string, json.Json)]) -> json.Json {
+    let ctype = exec.header_value(o.headers, "content-type").unwrap_or("");
+    let kind = kind_of(ctype, o.body);
+    var text = "";
+    var pretty = "";
+    var truncated = false;
+    if (kind == "json" || kind == "xml" || kind == "html" || kind == "text") {
+        let cut = text_prefix(o.body, DISPLAY_LIMIT);
+        text = cut.0;
+        truncated = cut.1;
+        if (kind == "json" && !truncated) {
+            pretty = pretty_json(text).unwrap_or("");
+        }
+    }
+    let image = if (kind == "image" && o.body.len() <= IMAGE_LIMIT) {
+        base64.base64(o.body)
+    } else {
+        ""
+    };
+    let wire = match (exec.header_value(o.headers, "content-length")) {
+        Option.Some(v) => parse_int(v.trim()).unwrap_or(o.body.len()),
+        Option.None => o.body.len(),
+    };
+    let sent_text = text_prefix(o.sent.body, SENT_LIMIT);
+    let sent_binary = from_utf8(o.sent.body).is_err();
+    var fields: [(string, json.Json)] = [
+        ("ok", jsonv.flag(o.ok)),
+        ("error", jsonv.str(o.error)),
+        ("status", jsonv.num(o.status)),
+        ("status_text", jsonv.str(status_text(o.status))),
+        ("headers", jsonv.pairs(o.headers)),
+        ("content_type", jsonv.str(ctype)),
+        ("kind", jsonv.str(kind)),
+        ("text", jsonv.str(text)),
+        ("pretty", jsonv.str(pretty)),
+        ("truncated", jsonv.flag(truncated)),
+        ("image", jsonv.str(image)),
+        ("size", jsonv.num(o.body.len())),
+        ("wire_size", jsonv.num(wire)),
+        ("duration_ms", jsonv.num(o.duration_ms)),
+        ("started_at", jsonv.num(o.started_at)),
+        (
+            "sent",
+            jsonv.obj(
+                [
+                    ("method", jsonv.str(o.sent.method)),
+                    ("url", jsonv.str(o.sent.url)),
+                    ("headers", jsonv.pairs(o.sent.headers)),
+                    ("body", jsonv.str(if (sent_binary) { "" } else { sent_text.0 })),
+                    ("body_size", jsonv.num(o.sent.body.len())),
+                    ("body_binary", jsonv.flag(sent_binary))
+                ]
+            )
+        ),
+        ("hops", hops_json(o.hops)),
+        ("history_id", jsonv.num(history_id))
+    ];
+    for f in extra {
+        fields.push(f);
+    }
+    jsonv.obj(fields)
+}
+
+// ---- history records -----------------------------------------------------------------------
+
+/// The outcome as stored: everything, with the bodies in base64 (cut at STORE_LIMIT).
+pub fn record(o: exec.Outcome) -> string {
+    let cut = o.body.len() > STORE_LIMIT;
+    let body = if (cut) { o.body.sub_bytes(0, STORE_LIMIT) } else { o.body };
+    let sent_body = if (o.sent.body.len() > STORE_LIMIT) {
+        o.sent.body.sub_bytes(0, STORE_LIMIT)
+    } else {
+        o.sent.body
+    };
+    json.stringify(
+        jsonv.obj(
+            [
+                ("v", jsonv.num(1)),
+                ("ok", jsonv.flag(o.ok)),
+                ("error", jsonv.str(o.error)),
+                ("status", jsonv.num(o.status)),
+                ("headers", jsonv.pairs(o.headers)),
+                ("body", jsonv.str(base64.base64(body))),
+                ("body_cut", jsonv.flag(cut)),
+                ("duration_ms", jsonv.num(o.duration_ms)),
+                ("started_at", jsonv.num(o.started_at)),
+                ("sent_method", jsonv.str(o.sent.method)),
+                ("sent_url", jsonv.str(o.sent.url)),
+                ("sent_headers", jsonv.pairs(o.sent.headers)),
+                ("sent_body", jsonv.str(base64.base64(sent_body))),
+                ("hops", hops_json(o.hops))
+            ]
+        )
+    )
+}
+
+fn pairs_back(j: json.Json, key: string) -> [(string, string)] {
+    var out: [(string, string)] = [];
+    for item in json.get_array(j, key).unwrap_or([]) {
+        let k = json.at(item, 0).and_then(json.as_string).unwrap_or("");
+        let v = json.at(item, 1).and_then(json.as_string).unwrap_or("");
+        out.push((k, v));
+    }
+    out
+}
+
+pub fn outcome_of_record(s: string) -> Result<exec.Outcome, string> {
+    let j = json.parse(s)?;
+    let body = base64.base64_decode(jsonv.get_str(j, "body"))?;
+    let sent_body = base64.base64_decode(jsonv.get_str(j, "sent_body"))?;
+    var hops: [exec.Hop] = [];
+    for h in json.get_array(j, "hops").unwrap_or([]) {
+        hops.push(
+            exec.Hop {
+                status: jsonv.get_int(h, "status"),
+                method: jsonv.get_str(h, "method"),
+                url: jsonv.get_str(h, "url"),
+                location: jsonv.get_str(h, "location")
+            }
+        );
+    }
+    Result.Ok(
+        exec.Outcome {
+            ok: jsonv.get_bool(j, "ok", false),
+            error: jsonv.get_str(j, "error"),
+            status: jsonv.get_int(j, "status"),
+            headers: pairs_back(j, "headers"),
+            body: body,
+            duration_ms: jsonv.get_int(j, "duration_ms"),
+            started_at: jsonv.get_int(j, "started_at"),
+            sent: exec.Sent {
+                method: jsonv.get_str(j, "sent_method"),
+                url: jsonv.get_str(j, "sent_url"),
+                headers: pairs_back(j, "sent_headers"),
+                body: sent_body
+            },
+            hops: hops,
+            // The stored jar already took them when the send finished.
+            set_cookies: []
+        }
+    )
+}
+
+/// Whether the stored body was cut at STORE_LIMIT.
+pub fn record_body_cut(s: string) -> bool {
+    match (json.parse(s)) {
+        Result.Ok(j) => jsonv.get_bool(j, "body_cut", false),
+        Result.Err(_) => false,
+    }
+}

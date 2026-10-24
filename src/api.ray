@@ -1,0 +1,686 @@
+//! The page ↔ program protocol over `window.ray.request({op, …})`. Every request is answered
+//! with `{ok: true, value}` or `{ok: false, error}`. This module never touches the window: it
+//! returns an `Action`, and the main loop does what needs the window or a fiber (send a
+//! request, open a save dialog, quit).
+//!
+//!   bootstrap                                → {projects, settings, version}
+//!   projects.list · projects.create {name, description, environment}
+//!   projects.update {id, name, description} · projects.delete {id}
+//!   environments.list {project_id} · environments.create {project_id, name, copy_from}
+//!   environments.rename {id, name} · environments.activate {id} · environments.delete {id}
+//!   environments.variables {id} · environments.save_variables {id, variables}
+//!   folders.variables {id, environment_id} · folders.save_variables {id, environment_id,
+//!     variables}                             (environment_id 0 = the folder's defaults)
+//!   folders.auth {id} · folders.save_auth {id, auth}
+//!   cookies.list {environment_id} · cookies.delete {environment_id, name, domain, path}
+//!   cookies.clear {environment_id}
+//!   curl.parse {text}                        → {request (a draft), warnings}
+//!   curl.export {request}                    → {command, missing}
+//!   openapi.import {project_id, folder_id, path | text}
+//!                                            → {folder_id, title, requests, folders, warnings}
+//!                                              (read and converted in a fiber)
+//!   variables {project_id, folder_id | request} → {environment, variables, missing, url, auth}
+//!   tree {project_id}                        → {folders, requests}
+//!   folders.create {project_id, parent_id, name} · folders.rename {id, name}
+//!   folders.move {id, parent_id} · folders.delete {id}
+//!   requests.create {project_id, folder_id, name} · requests.get {id}
+//!   requests.save {request} · requests.rename {id, name} · requests.move {id, folder_id}
+//!   requests.duplicate {id} · requests.delete {id}
+//!   send {run, request}                      → the response (answered when it arrives), with
+//!                                              {unresolved, captures, environment,
+//!                                               cookies_stored, cookies_ignored}
+//!   cancel {run}                             → the pending send answers {cancelled: true}
+//!   history.list {request_id} · history.get {id} · history.clear {request_id}
+//!   body.save {history_id}                   → the path, or null when cancelled
+//!   settings.set {key, value} · clipboard.write {text} · log {message} · quit
+
+import std/fs;
+import std/json;
+import std/time;
+import auth;
+import captures;
+import cookies;
+import curl;
+import exec;
+import jsonv;
+import model;
+import openapi;
+import store;
+import urls;
+import vars;
+import view;
+
+pub const VERSION: string = "0.1.0";
+
+/// The settings the page may write. `tabs.<project id>` keeps the open tabs of a project;
+/// `block_unresolved` = "1" refuses to send a request with an unresolved `{{name}}`.
+fn allowed_setting(key: string) -> bool {
+    key == "language"
+        || key == "last_project"
+        || key == "block_unresolved"
+        || key.starts_with("tabs.")
+}
+
+/// A send, ready to run in a fiber: what the main loop needs to answer it when it finishes.
+pub struct Job {
+    /// The page's id for this send (cancel names it).
+    run: int,
+    /// 0 = an unsaved draft: no history.
+    request_id: int,
+    prepared: exec.Prepared,
+    /// The environment the variables came from (0 = none): the captures write there.
+    environment_id: int,
+    environment: string,
+    captures: [model.Pair],
+    unresolved: [string],
+}
+
+pub enum Action {
+    /// Answer now with this JSON.
+    Reply(string),
+    /// Send the request in a fiber.
+    Send(Job),
+    /// Answer the pending send `run` with "cancelled", then answer this request.
+    Cancel(int),
+    /// Ask where to save the body of a history entry, then write it.
+    SaveBody(int),
+    /// The page's language changed: rebuild the menus, then answer.
+    Language(string),
+    Clipboard(string),
+    /// Read and convert an API description in a fiber, then `store_spec`.
+    ImportSpec(SpecJob),
+    Quit,
+}
+
+/// An API description to import into `folder_id` (0 = the project's top): the file at `path`,
+/// or `text` as pasted.
+pub struct SpecJob {
+    project_id: int,
+    folder_id: int,
+    path: string,
+    text: string,
+}
+
+/// The fiber's half of an import: read the file and convert it (no store here).
+pub fn read_spec(job: SpecJob) -> Result<openapi.Imported, string> {
+    var text = job.text;
+    if (job.path != "") {
+        let st = fs.stat(job.path)?;
+        if (st.size > openapi.MAX_SIZE) {
+            return Result.Err("the file is too large (32 MB at most)");
+        }
+        text = fs.read_file(job.path)?;
+    }
+    openapi.parse(text)
+}
+
+/// The main loop's half: the folders and requests, in one transaction.
+pub fn store_spec(
+    s: store.Store,
+    job: SpecJob,
+    imported: Result<openapi.Imported, string>
+) -> string {
+    let i = match (imported) {
+        Result.Ok(i) => i,
+        Result.Err(e) => return fail(e),
+    };
+    let written = store.tx(s, fn() -> Result<(model.Folder, int), string> {
+        let top = store.create_folder(s, job.project_id, job.folder_id, i.title)?;
+        store.save_folder_variables(s, top.id, 0, i.variables)?;
+        if (i.auth.kind != "inherit") {
+            store.save_folder_auth(s, top.id, i.auth)?;
+        }
+        for r in i.requests {
+            add_imported(s, job.project_id, top.id, r)?;
+        }
+        var folders = 1;
+        for g in i.groups {
+            let f = store.create_folder(s, job.project_id, top.id, g.name)?;
+            folders = folders + 1;
+            for r in g.requests {
+                add_imported(s, job.project_id, f.id, r)?;
+            }
+        }
+        Result.Ok((top, folders))
+    });
+    match (written) {
+        Result.Ok((top, folders)) => ok(
+            jsonv.obj(
+                [
+                    ("folder_id", jsonv.num(top.id)),
+                    ("title", jsonv.str(top.name)),
+                    ("requests", jsonv.num(openapi.count(i))),
+                    ("folders", jsonv.num(folders)),
+                    ("warnings", jsonv.strs(i.warnings))
+                ]
+            )
+        ),
+        Result.Err(e) => fail(e),
+    }
+}
+
+fn add_imported(
+    s: store.Store,
+    project_id: int,
+    folder_id: int,
+    r: model.Request
+) -> Result<model.Request, string> {
+    var x = r.clone();
+    x.project_id = project_id;
+    x.folder_id = folder_id;
+    store.create_request(s, x)
+}
+
+fn spec_job(s: store.Store, req: json.Json) -> Result<SpecJob, string> {
+    let project_id = jsonv.need_int(req, "project_id")?;
+    store.get_project(s, project_id)?;
+    let folder_id = jsonv.get_int(req, "folder_id");
+    if (folder_id != 0 && store.get_folder(s, folder_id)?.project_id != project_id) {
+        return Result.Err("the folder is not in this project");
+    }
+    let job = SpecJob {
+        project_id: project_id,
+        folder_id: folder_id,
+        path: jsonv.get_str(req, "path"),
+        text: jsonv.get_str(req, "text")
+    };
+    if (job.path == "" && job.text.trim() == "") {
+        return Result.Err("nothing to import: give a file or paste the description");
+    }
+    Result.Ok(job)
+}
+
+pub fn ok(value: json.Json) -> string {
+    json.stringify(jsonv.obj([("ok", jsonv.flag(true)), ("value", value)]))
+}
+
+pub fn fail(msg: string) -> string {
+    json.stringify(jsonv.obj([("ok", jsonv.flag(false)), ("error", jsonv.str(msg))]))
+}
+
+pub fn cancelled() -> string {
+    json.stringify(
+        jsonv.obj(
+            [
+                ("ok", jsonv.flag(false)),
+                ("cancelled", jsonv.flag(true)),
+                ("error", jsonv.str("cancelled"))
+            ]
+        )
+    )
+}
+
+fn projects_json(s: store.Store) -> Result<json.Json, string> {
+    var out: [json.Json] = [];
+    for p in store.list_projects(s)? {
+        out.push(model.project_json(p));
+    }
+    Result.Ok(jsonv.arr(out))
+}
+
+fn tree_json(s: store.Store, project_id: int) -> Result<json.Json, string> {
+    store.get_project(s, project_id)?;
+    var folders: [json.Json] = [];
+    for f in store.list_folders(s, project_id)? {
+        folders.push(model.folder_json(f));
+    }
+    var requests: [json.Json] = [];
+    for r in store.list_requests(s, project_id)? {
+        requests.push(model.request_summary_json(r));
+    }
+    Result.Ok(jsonv.obj([("folders", jsonv.arr(folders)), ("requests", jsonv.arr(requests))]))
+}
+
+fn history_json(items: [store.HistoryItem]) -> json.Json {
+    var out: [json.Json] = [];
+    for h in items {
+        out.push(
+            jsonv.obj(
+                [
+                    ("id", jsonv.num(h.id)),
+                    ("executed_at", jsonv.num(h.executed_at)),
+                    ("method", jsonv.str(h.method)),
+                    ("url", jsonv.str(h.url)),
+                    ("status", jsonv.num(h.status)),
+                    ("status_text", jsonv.str(view.status_text(h.status))),
+                    ("ok", jsonv.flag(h.ok)),
+                    ("duration_ms", jsonv.num(h.duration_ms)),
+                    ("size", jsonv.num(h.size))
+                ]
+            )
+        );
+    }
+    jsonv.arr(out)
+}
+
+fn bootstrap(s: store.Store) -> Result<json.Json, string> {
+    var settings: [(string, json.Json)] = [];
+    for (k, v) in store.all_settings(s)? {
+        settings.push((k, jsonv.str(v)));
+    }
+    Result.Ok(
+        jsonv.obj(
+            [
+                ("projects", projects_json(s)?),
+                ("settings", jsonv.obj(settings)),
+                ("version", jsonv.str(VERSION)),
+                ("methods", jsonv.strs(model.METHODS))
+            ]
+        )
+    )
+}
+
+/// The history entry of a finished send, ready for the store.
+pub fn history_item(o: exec.Outcome) -> store.HistoryItem {
+    store.HistoryItem {
+        id: 0,
+        request_id: 0,
+        executed_at: o.started_at,
+        method: o.sent.method,
+        url: o.sent.url,
+        status: o.status,
+        ok: o.ok,
+        duration_ms: o.duration_ms,
+        size: o.body.len()
+    }
+}
+
+/// A finished send: runs its captures, stores it in the request's history (when it has one)
+/// and renders the reply.
+pub fn finish(s: store.Store, job: Job, o: exec.Outcome) -> string {
+    let captured = captures.apply(s, job.environment_id, job.captures, o);
+    let (stored, ignored) = keep_cookies(s, job, o);
+    var history_id = 0;
+    if (job.request_id > 0) {
+        match (store.add_history(s, job.request_id, history_item(o), view.record(o))) {
+            Result.Ok(id) => history_id = id,
+            // A request deleted while its send was running has no history to write to.
+            Result.Err(e) => eprint("rayreq: history: " + e),
+        }
+    }
+    ok(
+        view.present_with(
+            o,
+            history_id,
+            [
+                ("unresolved", jsonv.strs(job.unresolved)),
+                ("captures", captures.captured_json(captured)),
+                ("environment", jsonv.str(job.environment)),
+                ("cookies_stored", jsonv.num(stored)),
+                ("cookies_ignored", jsonv.strs(ignored))
+            ]
+        )
+    )
+}
+
+/// Applies the Set-Cookie lines of a finished send to the environment's stored jar (read again
+/// now: another send may have changed it meanwhile). How many lines were kept, and why the
+/// others were ignored.
+fn keep_cookies(s: store.Store, job: Job, o: exec.Outcome) -> (int, [string]) {
+    if (!job.prepared.use_jar || o.set_cookies.len() == 0) {
+        return (0, []);
+    }
+    var jar = match (store.list_cookies(s, job.environment_id)) {
+        Result.Ok(j) => j,
+        Result.Err(e) => return (0, ["the cookie jar could not be read: ${e}"]),
+    };
+    var ignored: [string] = [];
+    for (from, line) in o.set_cookies {
+        match (urls.parse(from)) {
+            Result.Ok(u) => {
+                let (next, why) = cookies.receive(jar, [line], u, o.started_at + o.duration_ms);
+                jar = next;
+                ignored = ignored + why;
+            },
+            Result.Err(e) => ignored.push(e),
+        }
+    }
+    if let Result.Err(e) = store.save_cookies(s, job.environment_id, jar) {
+        return (0, ignored + ["the cookie jar could not be saved: ${e}"]);
+    }
+    (o.set_cookies.len() - ignored.len(), ignored)
+}
+
+pub fn cookies_json(cs: [cookies.Cookie]) -> json.Json {
+    var out: [json.Json] = [];
+    for c in cs {
+        out.push(
+            jsonv.obj(
+                [
+                    ("name", jsonv.str(c.name)),
+                    ("value", jsonv.str(c.value)),
+                    ("domain", jsonv.str(c.domain)),
+                    ("host_only", jsonv.flag(c.host_only)),
+                    ("path", jsonv.str(c.path)),
+                    ("expires", jsonv.num(c.expires)),
+                    ("secure", jsonv.flag(c.secure)),
+                    ("http_only", jsonv.flag(c.http_only)),
+                    ("same_site", jsonv.str(c.same_site))
+                ]
+            )
+        );
+    }
+    jsonv.arr(out)
+}
+
+fn environments_json(s: store.Store, project_id: int) -> Result<json.Json, string> {
+    store.get_project(s, project_id)?;
+    var out: [json.Json] = [];
+    for e in store.list_environments(s, project_id)? {
+        out.push(model.environment_json(e));
+    }
+    Result.Ok(jsonv.arr(out))
+}
+
+fn variables_list_json(vs: [vars.Var]) -> json.Json {
+    var out: [json.Json] = [];
+    for v in vs {
+        out.push(
+            jsonv.obj(
+                [
+                    ("key", jsonv.str(v.key)),
+                    ("value", jsonv.str(v.value)),
+                    ("kind", jsonv.str(v.kind)),
+                    ("source", jsonv.str(v.source))
+                ]
+            )
+        );
+    }
+    jsonv.arr(out)
+}
+
+/// What a send of `r` would put on the wire, before `exec.prepare`: the variables in scope, the
+/// auth that applies, the request with both resolved and applied, and the names left
+/// unresolved. The page's Variables tab and the send both come from here (R7).
+struct Plan {
+    scope: vars.Scope,
+    auth: auth.Effective,
+    request: model.Request,
+    credentials: [string],
+    missing: [string],
+}
+
+fn plan(s: store.Store, r: model.Request) -> Result<Plan, string> {
+    let (project_id, folder_id) = vars.location(s, r)?;
+    // A store error here fails: never an empty scope or a silently missing auth (R4).
+    let sc = vars.scope(s, project_id, folder_id)?;
+    let eff = auth.effective(s, r, folder_id)?;
+    var with_auth = r.clone();
+    with_auth.auth = eff.auth;
+    let (resolved, missing) = vars.resolve_request(with_auth, sc.vars);
+    let (applied, credentials) = auth.apply(resolved)?;
+    Result.Ok(
+        Plan { scope: sc, auth: eff, request: applied, credentials: credentials, missing: missing }
+    )
+}
+
+fn effective_auth_json(e: auth.Effective) -> json.Json {
+    jsonv.obj(
+        [
+            ("kind", jsonv.str(e.auth.kind)),
+            ("from", jsonv.str(e.from)),
+            ("source", jsonv.str(e.source))
+        ]
+    )
+}
+
+/// The variables a request (or a folder) sees, from the same code the send uses (R7). With a
+/// `request`, also what is left unresolved in it, its resolved URL and its auth.
+fn variables(s: store.Store, req: json.Json) -> Result<json.Json, string> {
+    if let Option.Some(j) = json.member(req, "request") {
+        let p = plan(s, model.request_of(j)?)?;
+        return Result.Ok(
+            jsonv.obj(
+                [
+                    ("environment_id", jsonv.num(p.scope.environment_id)),
+                    ("environment", jsonv.str(p.scope.environment)),
+                    ("variables", variables_list_json(p.scope.vars)),
+                    ("missing", jsonv.strs(p.missing)),
+                    ("url", jsonv.str(p.request.url)),
+                    ("auth", effective_auth_json(p.auth))
+                ]
+            )
+        );
+    }
+    let sc = vars.scope(s, jsonv.need_int(req, "project_id")?, jsonv.get_int(req, "folder_id"))?;
+    Result.Ok(
+        jsonv.obj(
+            [
+                ("environment_id", jsonv.num(sc.environment_id)),
+                ("environment", jsonv.str(sc.environment)),
+                ("variables", variables_list_json(sc.vars))
+            ]
+        )
+    )
+}
+
+/// What a send of `r` would put on the wire, as a curl command: the same plan (variables, auth)
+/// and the jar's cookies for its URL.
+fn curl_export(s: store.Store, r: model.Request) -> Result<json.Json, string> {
+    let p = plan(s, r)?;
+    var prepared = exec.prepare(p.request)?;
+    var cookie = "";
+    if (r.use_cookies && p.scope.environment_id != 0) {
+        let jar = store.list_cookies(s, p.scope.environment_id)?;
+        cookie = cookies.header(cookies.for_url(jar, prepared.url, time.now(), []));
+    }
+    Result.Ok(
+        jsonv.obj(
+            [
+                ("command", jsonv.str(curl.command(prepared, cookie))),
+                ("missing", jsonv.strs(p.missing))
+            ]
+        )
+    )
+}
+
+fn blocks_unresolved(s: store.Store) -> Result<bool, string> {
+    Result.Ok(store.get_setting(s, "block_unresolved")?.unwrap_or("0") == "1")
+}
+
+/// The pipeline of a send: plan (resolve + auth, on a copy) → prepare → the job for a fiber.
+fn prepare_send(s: store.Store, req: json.Json) -> Result<Job, string> {
+    let run = jsonv.need_int(req, "run")?;
+    let r = model.request_of(jsonv.need_obj(req, "request")?)?;
+    let p = plan(s, r)?;
+    let missing = p.missing;
+    let names = missing.join(", ");
+    if (missing.len() > 0 && blocks_unresolved(s)?) {
+        return Result.Err("unresolved variables: ${names}");
+    }
+    var prepared = match (exec.prepare(p.request)) {
+        Result.Ok(prep) => prep,
+        Result.Err(e) => return Result.Err(if (missing.len() > 0) { "${e} (unresolved variables: ${names})" } else { e }),
+    };
+    prepared.credentials = p.credentials;
+    if (r.use_cookies && p.scope.environment_id != 0) {
+        prepared.use_jar = true;
+        prepared.jar = store.list_cookies(s, p.scope.environment_id)?;
+    }
+    Result.Ok(
+        Job {
+            run: run,
+            request_id: r.id,
+            prepared: prepared,
+            environment_id: p.scope.environment_id,
+            environment: p.scope.environment,
+            captures: r.captures,
+            unresolved: missing
+        }
+    )
+}
+
+fn dispatch(s: store.Store, req: json.Json, op: string) -> Result<Action, string> {
+    let id = jsonv.get_int(req, "id");
+    let reply = match (op) {
+        "bootstrap" => bootstrap(s)?,
+        "projects.list" => projects_json(s)?,
+        "projects.create" => model.project_json(
+            store.create_project_with(
+                s,
+                jsonv.get_str(req, "name"),
+                jsonv.get_str(req, "description"),
+                jsonv.get_str(req, "environment")
+            )?
+        ),
+        "projects.update" => model.project_json(
+            store.update_project(
+                s,
+                id,
+                jsonv.get_str(req, "name"),
+                jsonv.get_str(req, "description")
+            )?
+        ),
+        "projects.delete" => jsonv.num(store.delete_project(s, id)?),
+        "environments.list" => environments_json(s, jsonv.need_int(req, "project_id")?)?,
+        "environments.create" => model.environment_json(
+            store.create_environment(
+                s,
+                jsonv.need_int(req, "project_id")?,
+                jsonv.get_str(req, "name"),
+                jsonv.get_int(req, "copy_from")
+            )?
+        ),
+        "environments.rename" => model.environment_json(store.rename_environment(s, id, jsonv.get_str(req, "name"))?),
+        "environments.activate" => model.environment_json(store.activate_environment(s, id)?),
+        "environments.delete" => jsonv.num(store.delete_environment(s, id)?),
+        "environments.variables" => {
+            store.get_environment(s, id)?;
+            model.pairs_json(store.environment_variables(s, id)?)
+        },
+        "environments.save_variables" => model.pairs_json(store.save_environment_variables(s, id, model.pairs_of(req, "variables"))?),
+        "variables" => variables(s, req)?,
+        "curl.parse" => {
+            let imported = curl.parse(jsonv.get_str(req, "text"))?;
+            jsonv.obj(
+                [
+                    ("request", model.request_json(imported.request)),
+                    ("warnings", jsonv.strs(imported.warnings))
+                ]
+            )
+        },
+        "openapi.import" => return Result.Ok(Action.ImportSpec(spec_job(s, req)?)),
+        "curl.export" => curl_export(s, model.request_of(jsonv.need_obj(req, "request")?)?)?,
+        "cookies.list" => {
+            store.get_environment(s, jsonv.need_int(req, "environment_id")?)?;
+            cookies_json(store.list_cookies(s, jsonv.need_int(req, "environment_id")?)?)
+        },
+        "cookies.delete" => jsonv.num(
+            store.delete_cookie(
+                s,
+                jsonv.need_int(req, "environment_id")?,
+                jsonv.get_str(req, "name"),
+                jsonv.get_str(req, "domain"),
+                jsonv.get_str(req, "path")
+            )?
+        ),
+        "cookies.clear" => jsonv.num(store.clear_cookies(s, jsonv.need_int(req, "environment_id")?)?),
+        "tree" => tree_json(s, jsonv.need_int(req, "project_id")?)?,
+        "folders.create" => model.folder_json(
+            store.create_folder(
+                s,
+                jsonv.need_int(req, "project_id")?,
+                jsonv.get_int(req, "parent_id"),
+                jsonv.get_str(req, "name")
+            )?
+        ),
+        "folders.rename" => model.folder_json(store.rename_folder(s, id, jsonv.get_str(req, "name"))?),
+        "folders.move" => model.folder_json(store.move_folder(s, id, jsonv.get_int(req, "parent_id"))?),
+        "folders.delete" => jsonv.num(store.delete_folder(s, id)?),
+        "folders.auth" => model.auth_json(store.get_folder(s, id)?.auth),
+        "folders.save_auth" => model.auth_json(
+            store.save_folder_auth(s, id, model.auth_of(jsonv.need_obj(req, "auth")?)?)?.auth
+        ),
+        "folders.variables" => {
+            store.get_folder(s, id)?;
+            model.pairs_json(store.folder_variables(s, id, jsonv.get_int(req, "environment_id"))?)
+        },
+        "folders.save_variables" => model.pairs_json(
+            store.save_folder_variables(
+                s,
+                id,
+                jsonv.get_int(req, "environment_id"),
+                model.pairs_of(req, "variables")
+            )?
+        ),
+        "requests.create" => {
+            var r = model.new_request(
+                jsonv.need_int(req, "project_id")?,
+                jsonv.get_int(req, "folder_id"),
+                jsonv.get_str(req, "name")
+            );
+            // A request created from a draft (duplicate of an unsaved tab, cURL later) brings
+            // its fields; a plain "New request" brings none.
+            if let Option.Some(draft) = json.member(req, "request") {
+                let d = model.request_of(draft)?;
+                r.method = d.method;
+                r.url = d.url;
+                r.params = d.params;
+                r.headers = d.headers;
+                r.body_type = d.body_type;
+                r.body = d.body;
+                r.form = d.form;
+                r.captures = d.captures;
+                r.auth = d.auth;
+                r.use_cookies = d.use_cookies;
+                r.timeout_ms = d.timeout_ms;
+                r.follow_redirects = d.follow_redirects;
+                r.max_redirects = d.max_redirects;
+            }
+            model.request_json(store.create_request(s, r)?)
+        },
+        "requests.get" => model.request_json(store.get_request(s, id)?),
+        "requests.save" => model.request_json(
+            store.save_request(s, model.request_of(jsonv.need_obj(req, "request")?)?)?
+        ),
+        "requests.rename" => model.request_json(store.rename_request(s, id, jsonv.get_str(req, "name"))?),
+        "requests.move" => model.request_json(store.move_request(s, id, jsonv.get_int(req, "folder_id"))?),
+        "requests.duplicate" => model.request_json(store.duplicate_request(s, id)?),
+        "requests.delete" => jsonv.num(store.delete_request(s, id)?),
+        "send" => return Result.Ok(Action.Send(prepare_send(s, req)?)),
+        "cancel" => return Result.Ok(Action.Cancel(jsonv.need_int(req, "run")?)),
+        "history.list" => history_json(store.list_history(s, jsonv.need_int(req, "request_id")?)?),
+        "history.get" => {
+            let rec = store.history_record(s, id)?;
+            view.present(view.outcome_of_record(rec)?, id)
+        },
+        "history.clear" => jsonv.num(store.clear_history(s, jsonv.need_int(req, "request_id")?)?),
+        "body.save" => return Result.Ok(Action.SaveBody(jsonv.need_int(req, "history_id")?)),
+        "settings.set" => {
+            let key = jsonv.need_str(req, "key")?;
+            if (!allowed_setting(key)) {
+                return Result.Err("unknown setting '${key}'");
+            }
+            let v = jsonv.get_str(req, "value");
+            store.set_setting(s, key, v)?;
+            if (key == "language") {
+                return Result.Ok(Action.Language(v));
+            }
+            jsonv.flag(true)
+        },
+        "clipboard.write" => return Result.Ok(Action.Clipboard(jsonv.get_str(req, "text"))),
+        "log" => {
+            eprint("rayreq: page: " + jsonv.get_str(req, "message"));
+            jsonv.flag(true)
+        },
+        "quit" => return Result.Ok(Action.Quit),
+        _ => return Result.Err("unknown op: ${op}"),
+    };
+    Result.Ok(Action.Reply(ok(reply)))
+}
+
+/// One request body from the page; never fails (an error is an `{ok: false}` reply).
+pub fn handle(s: store.Store, body: string) -> Action {
+    let req = match (json.parse(body)) {
+        Result.Ok(j) => j,
+        Result.Err(e) => return Action.Reply(fail("bad request: ${e}")),
+    };
+    let op = match (json.get_string(req, "op")) {
+        Option.Some(op) => op,
+        Option.None => return Action.Reply(fail("missing field 'op'")),
+    };
+    match (dispatch(s, req, op)) {
+        Result.Ok(a) => a,
+        Result.Err(e) => Action.Reply(fail(e)),
+    }
+}

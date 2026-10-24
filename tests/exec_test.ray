@@ -1,0 +1,318 @@
+// The exchange against a local echo server on a free port (port 0: never a well-known one).
+
+import std/deflate;
+import std/json;
+import std/net;
+import std/time;
+import net/webserver;
+import exec;
+import model;
+import urls;
+
+fn echo(req: webserver.Request) -> webserver.Response {
+    if (req.path.starts_with("/status/")) {
+        let code = parse_int(req.path.substring(8, req.path.len())).unwrap_or(500);
+        return webserver.text(code, "status ${code}");
+    }
+    if (req.path.starts_with("/redirect/")) {
+        let code = parse_int(req.path.substring(10, req.path.len())).unwrap_or(302);
+        var r = webserver.text(code, "");
+        r.headers.insert("Location", webserver.query_params(req).get_or("to", "/echo"));
+        return r;
+    }
+    if (req.path == "/loop") {
+        var r = webserver.text(302, "");
+        r.headers.insert("Location", "/loop");
+        return r;
+    }
+    if (req.path == "/slow") {
+        time.sleep(1500);
+        return webserver.text(200, "late");
+    }
+    if (req.path == "/bytes") {
+        return webserver.bytes_response(200, bytes_of([0, 159, 255, 1]));
+    }
+    if (req.path == "/gzip") {
+        var r = webserver.bytes_response(200, deflate.gzip_compress("zipped body".to_bytes()));
+        r.headers.insert("Content-Encoding", "gzip");
+        return r;
+    }
+    if (req.path == "/cookies") {
+        var r = webserver.text(200, "ok");
+        r.set_cookie.push("a=1; Path=/");
+        r.set_cookie.push("b=2; Path=/");
+        return r;
+    }
+    // /echo and anything else: what arrived, as JSON.
+    var hs = json.obj();
+    for (k, v) in req.headers {
+        hs = hs.field(k, v);
+    }
+    let body = json.obj()
+        .field("method", req.method)
+        .field("path", req.raw_path)
+        .field("query", req.query)
+        .field("body", from_utf8(req.body).unwrap_or("<binary>"))
+        .render();
+    var r = webserver.json_response(
+        body.substring(0, body.len() - 1) + ",\"headers\":" + hs.render() + "}"
+    );
+    r
+}
+
+fn start() -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    let _t = spawn(fn() {
+        let _ = webserver.serve_options_on(l, webserver.options()
+            .quiet(), fn() -> fn(webserver.Request) -> webserver.Response { echo });
+    });
+    port
+}
+
+fn req(method: string, url: string) -> model.Request {
+    var r = model.new_request(1, 0, "t");
+    r.method = method;
+    r.url = url;
+    r
+}
+
+fn perform(r: model.Request) -> exec.Outcome {
+    exec.run(exec.prepare(r).unwrap())
+}
+
+fn body_json(o: exec.Outcome) -> json.Json {
+    json.parse(from_utf8(o.body).unwrap()).unwrap()
+}
+
+fn echoed_header(o: exec.Outcome, name: string) -> Option<string> {
+    json.member(body_json(o), "headers").and_then(fn(h: json.Json) -> Option<string> {
+        json.get_string(h, name)
+    })
+}
+
+@test
+fn a_get_reaches_the_server_with_the_default_headers() {
+    let port = start();
+    let o = perform(req("GET", "127.0.0.1:${port}/echo?q=hello world"));
+    assert(o.ok);
+    assert_eq(o.status, 200);
+    let j = body_json(o);
+    assert_eq(json.get_string(j, "method").unwrap(), "GET");
+    assert_eq(json.get_string(j, "query").unwrap(), "q=hello%20world");
+    assert_eq(echoed_header(o, "user-agent").unwrap(), exec.USER_AGENT);
+    assert_eq(echoed_header(o, "accept").unwrap(), "*/*");
+    assert_eq(o.sent.url, "http://127.0.0.1:${port}/echo?q=hello%20world");
+    assert(o.duration_ms >= 0);
+}
+
+@test
+fn disabled_and_blank_headers_are_not_sent_and_user_values_win() {
+    let port = start();
+    var r = req("GET", "http://127.0.0.1:${port}/echo");
+    r.headers = [
+        model.Pair { key: "X-On", value: " yes ", enabled: true },
+        model.Pair { key: "X-Off", value: "no", enabled: false },
+        model.Pair { key: "User-Agent", value: "custom/1", enabled: true },
+        model.Pair { key: "", value: "", enabled: true }
+    ];
+    let o = perform(r);
+    assert_eq(echoed_header(o, "x-on").unwrap(), "yes");
+    assert(echoed_header(o, "x-off").is_none());
+    assert_eq(echoed_header(o, "user-agent").unwrap(), "custom/1");
+}
+
+@test
+fn repeated_headers_are_joined() {
+    let port = start();
+    var r = req("GET", "http://127.0.0.1:${port}/echo");
+    r.headers = [
+        model.Pair { key: "X-Multi", value: "a", enabled: true },
+        model.Pair { key: "x-multi", value: "b", enabled: true },
+        model.Pair { key: "Cookie", value: "a=1", enabled: true },
+        model.Pair { key: "Cookie", value: "b=2", enabled: true }
+    ];
+    let o = perform(r);
+    assert_eq(echoed_header(o, "x-multi").unwrap(), "a, b");
+    assert_eq(echoed_header(o, "cookie").unwrap(), "a=1; b=2");
+}
+
+@test
+fn header_injection_is_refused() {
+    var r = req("GET", "http://127.0.0.1:1/");
+    r.headers = [model.Pair { key: "X-A", value: "1\r\nX-Evil: 2", enabled: true }];
+    assert(exec.prepare(r).is_err());
+    r.headers = [model.Pair { key: "Bad Name", value: "1", enabled: true }];
+    assert(exec.prepare(r).is_err());
+}
+
+@test
+fn json_and_form_bodies_get_their_content_type() {
+    let port = start();
+    var r = req("POST", "http://127.0.0.1:${port}/echo");
+    r.body_type = "json";
+    r.body = "{\"a\": 1}";
+    let o = perform(r);
+    assert_eq(json.get_string(body_json(o), "body").unwrap(), "{\"a\": 1}");
+    assert_eq(echoed_header(o, "content-type").unwrap(), "application/json");
+
+    r.body_type = "form";
+    r.form = [
+        model.Pair { key: "name", value: "Ada Lovelace", enabled: true },
+        model.Pair { key: "skip", value: "x", enabled: false },
+        model.Pair { key: "city", value: "Málaga", enabled: true }
+    ];
+    let f = perform(r);
+    assert_eq(json.get_string(body_json(f), "body").unwrap(), "name=Ada+Lovelace&city=M%C3%A1laga");
+    assert_eq(echoed_header(f, "content-type").unwrap(), "application/x-www-form-urlencoded");
+
+    // A Content-Type of the user's is kept.
+    r.body_type = "json";
+    r.headers = [
+        model.Pair { key: "content-type", value: "application/vnd.api+json", enabled: true }
+    ];
+    let c = perform(r);
+    assert_eq(echoed_header(c, "content-type").unwrap(), "application/vnd.api+json");
+}
+
+@test
+fn head_works_without_waiting_for_a_body() {
+    let port = start();
+    let o = perform(req("HEAD", "http://127.0.0.1:${port}/echo"));
+    assert(o.ok);
+    assert_eq(o.status, 200);
+    assert_eq(o.body.len(), 0);
+}
+
+@test
+fn error_statuses_are_responses_not_failures() {
+    let port = start();
+    let o = perform(req("DELETE", "http://127.0.0.1:${port}/status/404"));
+    assert(o.ok);
+    assert_eq(o.status, 404);
+}
+
+@test
+fn a_302_after_a_post_becomes_a_get_without_body() {
+    let port = start();
+    var r = req("POST", "http://127.0.0.1:${port}/redirect/302?to=/echo");
+    r.body_type = "json";
+    r.body = "{}";
+    let o = perform(r);
+    assert_eq(o.status, 200);
+    assert_eq(o.hops.len(), 1);
+    assert_eq(o.hops[0].status, 302);
+    assert_eq(json.get_string(body_json(o), "method").unwrap(), "GET");
+    assert_eq(json.get_string(body_json(o), "body").unwrap(), "");
+    assert(echoed_header(o, "content-type").is_none());
+}
+
+@test
+fn a_307_repeats_the_method_and_the_body() {
+    let port = start();
+    var r = req("PUT", "http://127.0.0.1:${port}/redirect/307?to=/echo");
+    r.body_type = "text";
+    r.body = "same";
+    let o = perform(r);
+    assert_eq(json.get_string(body_json(o), "method").unwrap(), "PUT");
+    assert_eq(json.get_string(body_json(o), "body").unwrap(), "same");
+}
+
+@test
+fn redirects_can_be_turned_off() {
+    let port = start();
+    var r = req("GET", "http://127.0.0.1:${port}/redirect/301?to=/echo");
+    r.follow_redirects = false;
+    let o = perform(r);
+    assert_eq(o.status, 301);
+    assert_eq(o.hops.len(), 0);
+    assert_eq(exec.header_value(o.headers, "Location").unwrap(), "/echo");
+}
+
+@test
+fn a_redirect_loop_stops_at_the_limit() {
+    let port = start();
+    var r = req("GET", "http://127.0.0.1:${port}/loop");
+    r.max_redirects = 3;
+    let o = perform(r);
+    assert(!o.ok);
+    assert(o.error.contains("too many redirects"));
+    assert_eq(o.hops.len(), 3);
+}
+
+@test
+fn credentials_do_not_follow_a_redirect_to_another_origin() {
+    let a = start();
+    let b = start();
+    var r = req("GET", "http://127.0.0.1:${a}/redirect/302?to=http://127.0.0.1:${b}/echo");
+    r.headers = [
+        model.Pair { key: "Authorization", value: "Bearer secret", enabled: true },
+        model.Pair { key: "X-Keep", value: "1", enabled: true }
+    ];
+    r.headers.push(model.Pair { key: "X-Api-Key", value: "k", enabled: true });
+    // An API key header from the auth is a credential too (api.ray marks it).
+    var p = exec.prepare(r).unwrap();
+    p.credentials = ["x-api-key"];
+    let o = exec.run(p);
+    assert_eq(o.status, 200);
+    assert(echoed_header(o, "authorization").is_none());
+    assert(echoed_header(o, "x-api-key").is_none());
+    assert_eq(echoed_header(o, "x-keep").unwrap(), "1");
+    // Same origin: they stay.
+    var same = req("GET", "http://127.0.0.1:${a}/redirect/302?to=/echo");
+    same.headers = [model.Pair { key: "Authorization", value: "Bearer secret", enabled: true }];
+    assert_eq(echoed_header(perform(same), "authorization").unwrap(), "Bearer secret");
+}
+
+@test
+fn the_timeout_is_reported() {
+    let port = start();
+    var r = req("GET", "http://127.0.0.1:${port}/slow");
+    r.timeout_ms = 300;
+    let o = perform(r);
+    assert(!o.ok);
+    assert(o.duration_ms < 1400);
+}
+
+@test
+fn a_refused_connection_is_a_failure_with_the_reason() {
+    let o = perform(req("GET", "http://127.0.0.1:1/"));
+    assert(!o.ok);
+    assert(o.error != "");
+    assert_eq(o.status, 0);
+}
+
+@test
+fn binary_and_gzip_bodies_arrive_as_bytes() {
+    let port = start();
+    let b = perform(req("GET", "http://127.0.0.1:${port}/bytes"));
+    assert_eq(b.body, bytes_of([0, 159, 255, 1]));
+    let g = perform(req("GET", "http://127.0.0.1:${port}/gzip"));
+    assert_eq(from_utf8(g.body).unwrap(), "zipped body");
+}
+
+@test
+fn repeated_response_headers_are_kept() {
+    let port = start();
+    let o = perform(req("GET", "http://127.0.0.1:${port}/cookies"));
+    var cookies: [string] = [];
+    for (k, v) in o.headers {
+        if (k == "set-cookie") {
+            cookies.push(v);
+        }
+    }
+    assert_eq(cookies, ["a=1; Path=/", "b=2; Path=/"]);
+}
+
+@test
+fn the_raw_request_lists_what_the_client_adds() {
+    var r = req("POST", "http://example.com:8080/x");
+    r.body_type = "text";
+    r.body = "hi";
+    let p = exec.prepare(r).unwrap();
+    let hs = exec.wire_headers(p);
+    assert_eq(hs[0], ("Host", "example.com:8080"));
+    assert_eq(exec.header_value(hs, "content-length").unwrap(), "2");
+    assert_eq(exec.header_value(hs, "accept-encoding").unwrap(), "gzip");
+    assert_eq(urls.target(p.url), "/x");
+}

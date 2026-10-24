@@ -1,0 +1,82 @@
+import std/json;
+import exec;
+import view;
+
+fn outcome(ctype: string, body: bytes) -> exec.Outcome {
+    exec.Outcome {
+        ok: true,
+        error: "",
+        status: 200,
+        headers: [("content-type", ctype), ("set-cookie", "a=1"), ("set-cookie", "b=2")],
+        body: body,
+        duration_ms: 12,
+        started_at: 1700000000000,
+        sent: exec.Sent { method: "POST", url: "http://h/x", headers: [("Host", "h")], body: b"{}" },
+        hops: [exec.Hop { status: 302, method: "POST", url: "http://h/old", location: "/x" }],
+        set_cookies: []
+    }
+}
+
+@test
+fn kinds_come_from_the_content_type_then_the_content() {
+    assert_eq(view.kind_of("application/json; charset=utf-8", b"{}"), "json");
+    assert_eq(view.kind_of("application/problem+json", b"{}"), "json");
+    assert_eq(view.kind_of("text/html", b"<p>"), "html");
+    assert_eq(view.kind_of("image/png", bytes_of([137, 80])), "image");
+    assert_eq(view.kind_of("", b"[1, 2]"), "json");
+    assert_eq(view.kind_of("application/octet-stream", b"<?xml version=\"1.0\"?><a/>"), "xml");
+    assert_eq(view.kind_of("application/octet-stream", bytes_of([0, 255, 254])), "binary");
+    assert_eq(view.kind_of("text/plain", b""), "empty");
+}
+
+@test
+fn pretty_json_keeps_big_numbers_and_key_order() {
+    assert_eq(
+        view.pretty_json("{\"z\":12345678901234567890,\"a\":[1]}").unwrap(),
+        "{\n  \"z\": 12345678901234567890,\n  \"a\": [\n    1\n  ]\n}"
+    );
+    assert(view.pretty_json("{not json").is_none());
+}
+
+@test
+fn present_gives_the_page_what_it_shows() {
+    let j = view.present(outcome("application/json", b"{\"a\":1}"), 7);
+    assert_eq(json.get_string(j, "kind").unwrap(), "json");
+    assert_eq(json.get_string(j, "pretty").unwrap(), "{\n  \"a\": 1\n}");
+    assert_eq(json.get_string(j, "status_text").unwrap(), "OK");
+    assert_eq(json.get_int(j, "history_id").unwrap(), 7);
+    assert_eq(json.get_array(j, "headers").unwrap().len(), 3);
+    assert_eq(json.get_array(j, "hops").unwrap().len(), 1);
+    let sent = json.member(j, "sent").unwrap();
+    assert_eq(json.get_string(sent, "body").unwrap(), "{}");
+}
+
+@test
+fn a_binary_body_is_never_shown_as_text() {
+    let j = view.present(outcome("application/octet-stream", bytes_of([0, 255, 1])), 0);
+    assert_eq(json.get_string(j, "kind").unwrap(), "binary");
+    assert_eq(json.get_string(j, "text").unwrap(), "");
+    assert_eq(json.get_int(j, "size").unwrap(), 3);
+}
+
+@test
+fn a_record_brings_the_outcome_back_byte_for_byte() {
+    let o = outcome("application/octet-stream", bytes_of([0, 255, 1, 128]));
+    let back = view.outcome_of_record(view.record(o)).unwrap();
+    assert_eq(back.body, o.body);
+    assert_eq(back.headers, o.headers);
+    assert_eq(back.sent.body, o.sent.body);
+    assert_eq(back.sent.url, "http://h/x");
+    assert_eq(back.hops[0].location, "/x");
+    assert_eq(back.started_at, o.started_at);
+    assert(!view.record_body_cut(view.record(o)));
+}
+
+@test
+fn a_long_text_is_cut_on_a_character_boundary() {
+    // 'é' is two bytes: a cut in its middle must back off to before it.
+    var s = "a".repeat(view.DISPLAY_LIMIT - 1) + "é" + "tail";
+    let j = view.present(outcome("text/plain", s.to_bytes()), 0);
+    assert(json.get_bool(j, "truncated").unwrap());
+    assert_eq(json.get_string(j, "text").unwrap().len(), view.DISPLAY_LIMIT - 1);
+}

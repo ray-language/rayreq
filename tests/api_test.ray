@@ -1,0 +1,224 @@
+// The page's protocol against a temporary database: the JSON the page sends, the JSON it gets.
+
+import std/fs;
+import std/json;
+import api;
+import exec;
+import model;
+import store;
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-api").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+/// The reply of an op that answers at once.
+fn call(s: store.Store, body: string) -> json.Json {
+    match (api.handle(s, body)) {
+        api.Action.Reply(r) => json.parse(r).unwrap(),
+        _ => panic("expected an immediate reply to ${body}"),
+    }
+}
+
+fn value(s: store.Store, body: string) -> json.Json {
+    let r = call(s, body);
+    if (!json.get_bool(r, "ok").unwrap_or(false)) {
+        panic("op failed: ${body} → ${json.get_string(r, "error").unwrap_or("?")}");
+    }
+    json.member(r, "value").unwrap()
+}
+
+fn error_of(s: store.Store, body: string) -> string {
+    let r = call(s, body);
+    assert(!json.get_bool(r, "ok").unwrap_or(true));
+    json.get_string(r, "error").unwrap_or("")
+}
+
+@test
+fn bootstrap_lists_projects_settings_and_methods() {
+    let s = fresh();
+    value(s, "{\"op\":\"projects.create\",\"name\":\"Demo\"}");
+    value(s, "{\"op\":\"settings.set\",\"key\":\"last_project\",\"value\":\"1\"}");
+    let b = value(s, "{\"op\":\"bootstrap\"}");
+    assert_eq(json.get_array(b, "projects").unwrap().len(), 1);
+    assert_eq(json.get_string(json.member(b, "settings").unwrap(), "last_project").unwrap(), "1");
+    assert(json.get_array(b, "methods").unwrap().len() >= 7);
+}
+
+@test
+fn a_tree_has_folders_and_request_summaries() {
+    let s = fresh();
+    let p = json.get_int(value(s, "{\"op\":\"projects.create\",\"name\":\"P\"}"), "id").unwrap();
+    let f = json.get_int(value(s, "{\"op\":\"folders.create\",\"project_id\":${p},\"parent_id\":0,\"name\":\"Users\"}"), "id")
+        .unwrap();
+    value(
+        s,
+        "{\"op\":\"requests.create\",\"project_id\":${p},\"folder_id\":${f},\"name\":\"List\"}"
+    );
+    let t = value(s, "{\"op\":\"tree\",\"project_id\":${p}}");
+    let rs = json.get_array(t, "requests").unwrap();
+    assert_eq(rs.len(), 1);
+    assert_eq(json.get_int(rs[0], "folder_id").unwrap(), f);
+    assert_eq(json.get_string(rs[0], "method").unwrap(), "GET");
+    // Summaries carry no body.
+    assert(json.member(rs[0], "body").is_none());
+}
+
+@test
+fn a_draft_is_saved_and_validated() {
+    let s = fresh();
+    let p = json.get_int(value(s, "{\"op\":\"projects.create\",\"name\":\"P\"}"), "id").unwrap();
+    let r = value(
+        s,
+        "{\"op\":\"requests.create\",\"project_id\":${p},\"folder_id\":0,\"name\":\"R\"}"
+    );
+    let id = json.get_int(r, "id").unwrap();
+    let saved = value(
+        s,
+        "{\"op\":\"requests.save\",\"request\":{\"id\":${id},\"name\":\"Renamed\",\"method\":\"post\",\"url\":\" http://h/x \",\"headers\":[{\"key\":\"A\",\"value\":\"1\",\"enabled\":true},{\"key\":\"\",\"value\":\"\",\"enabled\":true}],\"body_type\":\"json\",\"body\":\"{}\",\"timeout_ms\":-5,\"max_redirects\":500}}"
+    );
+    assert_eq(json.get_string(saved, "method").unwrap(), "POST");
+    assert_eq(json.get_string(saved, "url").unwrap(), "http://h/x");
+    // The trailing blank row is dropped, the numbers clamped.
+    assert_eq(json.get_array(saved, "headers").unwrap().len(), 1);
+    assert_eq(json.get_int(saved, "timeout_ms").unwrap(), 0);
+    assert_eq(json.get_int(saved, "max_redirects").unwrap(), 50);
+    assert(
+        error_of(
+            s,
+            "{\"op\":\"requests.save\",\"request\":{\"id\":${id},\"name\":\"R\",\"method\":\"BREW\"}}"
+        ).contains(
+            "unsupported method"
+        )
+    );
+    assert(
+        error_of(
+            s,
+            "{\"op\":\"requests.save\",\"request\":{\"id\":${id},\"name\":\"R\",\"method\":\"GET\",\"body_type\":\"yaml\"}}"
+        ).contains(
+            "unsupported body type"
+        )
+    );
+}
+
+@test
+fn send_hands_the_request_to_the_main_loop() {
+    let s = fresh();
+    let p = json.get_int(value(s, "{\"op\":\"projects.create\",\"name\":\"P\"}"), "id").unwrap();
+    // Request 9 does not exist (deleted while its tab was open): its own project counts.
+    match (api.handle(
+        s,
+        "{\"op\":\"send\",\"run\":3,\"request\":{\"id\":9,\"project_id\":${p},\"method\":\"GET\",\"url\":\"localhost:9/x\",\"captures\":[{\"key\":\"t\",\"value\":\"a.b\"}]}}"
+    )) {
+        api.Action.Send(job) => {
+            assert_eq(job.run, 3);
+            assert_eq(job.request_id, 9);
+            assert_eq(job.prepared.url.host, "localhost");
+            assert_eq(job.prepared.url.port, 9);
+            assert_eq(job.environment, "Default");
+            assert_eq(job.captures.len(), 1);
+        },
+        _ => panic("expected Send"),
+    }
+    // A request that cannot go out is answered at once.
+    assert(
+        error_of(
+            s,
+            "{\"op\":\"send\",\"run\":4,\"request\":{\"project_id\":${p},\"method\":\"GET\",\"url\":\"\"}}"
+        ).contains(
+            "empty"
+        )
+    );
+    // A request of no project has no variables to resolve with.
+    assert(
+        error_of(s, "{\"op\":\"send\",\"run\":5,\"request\":{\"method\":\"GET\",\"url\":\"h\"}}").contains(
+            "no project"
+        )
+    );
+    // An unresolved variable in the host is named in the error.
+    assert(
+        error_of(
+            s,
+            "{\"op\":\"send\",\"run\":6,\"request\":{\"project_id\":${p},\"method\":\"GET\",\"url\":\"{{base}}/x\"}}"
+        ).contains(
+            "unresolved variables: base"
+        )
+    );
+}
+
+fn job(id: int, env: int, caps: [model.Pair]) -> api.Job {
+    var r = model.new_request(0, 0, "");
+    r.url = "http://h/";
+    api.Job {
+        run: 1,
+        request_id: id,
+        prepared: exec.prepare(r).unwrap(),
+        environment_id: env,
+        environment: "E",
+        captures: caps,
+        unresolved: ["u"]
+    }
+}
+
+@test
+fn a_finished_send_lands_in_the_history() {
+    let s = fresh();
+    let p = json.get_int(value(s, "{\"op\":\"projects.create\",\"name\":\"P\"}"), "id").unwrap();
+    let id = json.get_int(value(s, "{\"op\":\"requests.create\",\"project_id\":${p},\"folder_id\":0,\"name\":\"R\"}"), "id")
+        .unwrap();
+    let o = exec.Outcome {
+        ok: true,
+        error: "",
+        status: 201,
+        headers: [("content-type", "application/json")],
+        body: b"{\"id\":1}",
+        duration_ms: 9,
+        started_at: 1700000000000,
+        sent: exec.Sent { method: "POST", url: "http://h/users", headers: [], body: b"" },
+        hops: [],
+        set_cookies: []
+    };
+    let reply = json.parse(api.finish(s, job(id, 0, []), o)).unwrap();
+    let shown = json.member(reply, "value").unwrap();
+    let hid = json.get_int(shown, "history_id").unwrap();
+    assert(hid > 0);
+    // What the send adds to the exchange travels with it.
+    assert_eq(json.get_array(shown, "unresolved").unwrap().len(), 1);
+    assert_eq(json.get_string(shown, "environment").unwrap(), "E");
+    assert_eq(json.get_array(shown, "captures").unwrap().len(), 0);
+    let list = value(s, "{\"op\":\"history.list\",\"request_id\":${id}}");
+    let items = json.as_array(list).unwrap();
+    assert_eq(items.len(), 1);
+    assert_eq(json.get_int(items[0], "status").unwrap(), 201);
+    assert_eq(json.get_string(items[0], "status_text").unwrap(), "Created");
+    let again = value(s, "{\"op\":\"history.get\",\"id\":${hid}}");
+    assert_eq(json.get_string(again, "pretty").unwrap(), "{\n  \"id\": 1\n}");
+    // An unsaved request (id 0) has no history.
+    let unsaved = json.parse(api.finish(s, job(0, 0, []), o)).unwrap();
+    assert_eq(json.get_int(json.member(unsaved, "value").unwrap(), "history_id").unwrap(), 0);
+}
+
+@test
+fn only_known_settings_are_written() {
+    let s = fresh();
+    assert(
+        error_of(s, "{\"op\":\"settings.set\",\"key\":\"evil\",\"value\":\"x\"}").contains(
+            "unknown setting"
+        )
+    );
+    match (api.handle(s, "{\"op\":\"settings.set\",\"key\":\"language\",\"value\":\"es\"}")) {
+        api.Action.Language(l) => assert_eq(l, "es"),
+        _ => panic("expected Language"),
+    }
+    value(s, "{\"op\":\"settings.set\",\"key\":\"tabs.3\",\"value\":\"[1,2]\"}");
+}
+
+@test
+fn bad_requests_get_an_error_reply() {
+    let s = fresh();
+    assert(error_of(s, "not json").starts_with("bad request"));
+    assert(error_of(s, "{}").contains("op"));
+    assert(error_of(s, "{\"op\":\"nope\"}").contains("unknown op"));
+    assert(error_of(s, "{\"op\":\"requests.get\",\"id\":42}").contains("not found"));
+    assert(error_of(s, "{\"op\":\"tree\"}").contains("project_id"));
+}

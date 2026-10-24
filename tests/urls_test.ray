@@ -1,0 +1,111 @@
+import urls;
+
+fn p(s: string) -> urls.Url {
+    urls.parse(s).unwrap()
+}
+
+@test
+fn splits_an_absolute_url() {
+    let u = p("HTTPS://API.Example.com:8443/v1/users?page=2#top");
+    assert_eq(u.scheme, "https");
+    assert_eq(u.host, "api.example.com");
+    assert_eq(u.port, 8443);
+    assert_eq(u.path, "/v1/users");
+    assert_eq(u.query, "page=2");
+    assert_eq(urls.render(u), "https://api.example.com:8443/v1/users?page=2");
+}
+
+@test
+fn an_empty_path_is_the_root_and_the_default_port_is_left_out() {
+    let u = p("http://example.com:80?x=1");
+    assert_eq(u.path, "/");
+    assert_eq(urls.authority(u), "example.com");
+    assert_eq(urls.effective_port(u), 80);
+    assert_eq(urls.target(u), "/?x=1");
+}
+
+@test
+fn ipv6_hosts_keep_their_brackets_in_the_authority() {
+    let u = p("http://[::1]:9000/x");
+    assert_eq(u.host, "::1");
+    assert_eq(u.port, 9000);
+    assert_eq(urls.authority(u), "[::1]:9000");
+}
+
+@test
+fn rejects_what_it_cannot_send() {
+    assert(urls.parse("ftp://example.com").is_err());
+    assert(urls.parse("example.com").is_err());
+    assert(urls.parse("http://:80/").is_err());
+    assert(urls.parse("http://example.com:99999/").is_err());
+    assert(urls.parse("http://example.com:abc/").is_err());
+    assert(urls.parse("http://user:pw@example.com/").is_err());
+}
+
+@test
+fn adds_http_when_the_scheme_is_missing() {
+    assert_eq(urls.with_scheme("localhost:8080/x"), "http://localhost:8080/x");
+    assert_eq(urls.with_scheme("  https://a.b  "), "https://a.b");
+    assert_eq(urls.with_scheme("HTTP://a.b"), "HTTP://a.b");
+}
+
+@test
+fn encodes_what_the_user_typed_without_double_encoding() {
+    let u = p("http://h/a b/é?q=hello world&r=%20ok&s=100%&t={x}");
+    assert_eq(u.path, "/a%20b/%C3%A9");
+    assert_eq(u.query, "q=hello%20world&r=%20ok&s=100%25&t=%7Bx%7D");
+    // Normalizing again changes nothing.
+    assert_eq(urls.encode_loose(u.query), u.query);
+}
+
+@test
+fn resolves_redirect_locations() {
+    let base = p("https://api.example.com/v1/users/42?x=1");
+    assert_eq(urls.render(urls.resolve(base, "/login").unwrap()), "https://api.example.com/login");
+    assert_eq(
+        urls.render(urls.resolve(base, "43").unwrap()),
+        "https://api.example.com/v1/users/43"
+    );
+    assert_eq(
+        urls.render(urls.resolve(base, "../teams?a=b").unwrap()),
+        "https://api.example.com/v1/teams?a=b"
+    );
+    assert_eq(
+        urls.render(urls.resolve(base, "?page=2").unwrap()),
+        "https://api.example.com/v1/users/42?page=2"
+    );
+    assert_eq(
+        urls.render(urls.resolve(base, "//cdn.example.com/a").unwrap()),
+        "https://cdn.example.com/a"
+    );
+    assert_eq(urls.render(urls.resolve(base, "http://other:81/").unwrap()), "http://other:81/");
+}
+
+@test
+fn removes_dot_segments() {
+    assert_eq(urls.remove_dots("/a/b/../c/./d"), "/a/c/d");
+    assert_eq(urls.remove_dots("/../../x"), "/x");
+    assert_eq(urls.remove_dots("/a/b/.."), "/a/");
+}
+
+@test
+fn origins_compare_scheme_host_and_effective_port() {
+    assert_eq(urls.origin(p("http://a.com/x")), urls.origin(p("http://A.com:80/y")));
+    assert(urls.origin(p("http://a.com/")) != urls.origin(p("https://a.com/")));
+}
+
+@test
+fn form_encoding_uses_plus_for_spaces() {
+    assert_eq(urls.form_encode([("a b", "c&d"), ("e", "ñ")]), "a+b=c%26d&e=%C3%B1");
+}
+
+@test
+fn a_host_with_characters_no_server_has_is_refused() {
+    match (urls.parse("http://{{base}}/x")) {
+        Result.Ok(_) => panic("accepted"),
+        Result.Err(e) => assert(e.contains("invalid host")),
+    }
+    assert(urls.parse("http://a b/x").is_err());
+    assert(urls.parse("http://my_host.local:8080/").is_ok());
+    assert(urls.parse("http://[::1]:8080/").is_ok());
+}

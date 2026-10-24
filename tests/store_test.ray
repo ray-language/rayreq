@@ -1,0 +1,215 @@
+// The SQLite store on a fresh temporary database per test.
+
+import std/fs;
+import model;
+import store;
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-test").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+fn pair(k: string, v: string, on: bool) -> model.Pair {
+    model.Pair { key: k, value: v, enabled: on }
+}
+
+@test
+fn migrations_run_once_and_reopening_keeps_the_data() {
+    let dir = fs.make_temp_dir("rayreq-test").unwrap();
+    let path = dir + "/rayreq.db";
+    let s = store.open(path).unwrap();
+    assert_eq(store.schema_version(s).unwrap(), 4);
+    store.create_project(s, "API", "").unwrap();
+    store.close_store(s);
+    let again = store.open(path).unwrap();
+    assert_eq(store.schema_version(again).unwrap(), 4);
+    assert_eq(store.list_projects(again).unwrap().len(), 1);
+}
+
+@test
+fn projects_are_listed_by_name_and_need_one() {
+    let s = fresh();
+    store.create_project(s, "zeta", "").unwrap();
+    store.create_project(s, "  Alpha  ", "the first").unwrap();
+    let ps = store.list_projects(s).unwrap();
+    assert_eq(ps[0].name, "Alpha");
+    assert_eq(ps[0].description, "the first");
+    assert_eq(ps[1].name, "zeta");
+    assert(store.create_project(s, "   ", "").is_err());
+    let up = store.update_project(s, ps[1].id, "Zeta", "x").unwrap();
+    assert_eq(up.name, "Zeta");
+    assert(store.update_project(s, 999, "n", "").is_err());
+}
+
+@test
+fn a_request_round_trips_every_field() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    var r = model.new_request(p.id, 0, "Create user");
+    r.method = "POST";
+    r.url = "https://api.example.com/users?x=1";
+    r.params = [pair("x", "1", true), pair("debug", "true", false)];
+    r.headers = [pair("Accept", "application/json", true)];
+    r.body_type = "json";
+    r.body = "{\n  \"name\": \"Ada\"\n}";
+    r.form = [pair("a", "b", true)];
+    r.timeout_ms = 1234;
+    r.follow_redirects = false;
+    r.max_redirects = 3;
+    let saved = store.create_request(s, r).unwrap();
+    let back = store.get_request(s, saved.id).unwrap();
+    assert_eq(back.folder_id, 0);
+    assert_eq(back.method, "POST");
+    assert_eq(back.url, r.url);
+    assert_eq(back.params.len(), 2);
+    assert_eq(back.params[1].enabled, false);
+    assert_eq(back.headers[0].value, "application/json");
+    assert_eq(back.body, r.body);
+    assert_eq(back.form[0].key, "a");
+    assert_eq(back.timeout_ms, 1234);
+    assert_eq(back.follow_redirects, false);
+    assert_eq(back.max_redirects, 3);
+}
+
+@test
+fn saving_does_not_move_a_request() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "F").unwrap();
+    let r = store.create_request(s, model.new_request(p.id, f.id, "R")).unwrap();
+    // A stale draft that still thinks it is at the root.
+    var draft = r;
+    draft.folder_id = 0;
+    draft.url = "http://x";
+    let saved = store.save_request(s, draft).unwrap();
+    assert_eq(saved.folder_id, f.id);
+    assert_eq(saved.url, "http://x");
+}
+
+@test
+fn folders_nest_and_cannot_move_into_themselves() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "a").unwrap();
+    let b = store.create_folder(s, p.id, a.id, "b").unwrap();
+    let c = store.create_folder(s, p.id, b.id, "c").unwrap();
+    assert_eq(c.parent_id, b.id);
+    assert(store.move_folder(s, a.id, c.id).is_err());
+    assert(store.move_folder(s, a.id, a.id).is_err());
+    let moved = store.move_folder(s, c.id, 0).unwrap();
+    assert_eq(moved.parent_id, 0);
+}
+
+@test
+fn things_stay_inside_their_project() {
+    let s = fresh();
+    let p1 = store.create_project(s, "P1", "").unwrap();
+    let p2 = store.create_project(s, "P2", "").unwrap();
+    let f2 = store.create_folder(s, p2.id, 0, "other").unwrap();
+    assert(store.create_folder(s, p1.id, f2.id, "x").is_err());
+    assert(store.create_request(s, model.new_request(p1.id, f2.id, "x")).is_err());
+    let r = store.create_request(s, model.new_request(p1.id, 0, "r")).unwrap();
+    assert(store.move_request(s, r.id, f2.id).is_err());
+}
+
+@test
+fn deleting_a_folder_takes_its_subtree_and_requests() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let a = store.create_folder(s, p.id, 0, "a").unwrap();
+    let b = store.create_folder(s, p.id, a.id, "b").unwrap();
+    let r = store.create_request(s, model.new_request(p.id, b.id, "deep")).unwrap();
+    store.create_request(s, model.new_request(p.id, 0, "root")).unwrap();
+    store.delete_folder(s, a.id).unwrap();
+    assert_eq(store.list_folders(s, p.id).unwrap().len(), 0);
+    let left = store.list_requests(s, p.id).unwrap();
+    assert_eq(left.len(), 1);
+    assert_eq(left[0].name, "root");
+    assert(store.get_request(s, r.id).is_err());
+}
+
+@test
+fn deleting_a_project_takes_everything() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let f = store.create_folder(s, p.id, 0, "f").unwrap();
+    let r = store.create_request(s, model.new_request(p.id, f.id, "r")).unwrap();
+    store.add_history(s, r.id, item(200), "{}").unwrap();
+    store.delete_project(s, p.id).unwrap();
+    assert_eq(store.query(s, "SELECT COUNT(*) FROM history", []).unwrap()[0][0], "0");
+    assert_eq(store.query(s, "SELECT COUNT(*) FROM requests", []).unwrap()[0][0], "0");
+    assert_eq(store.query(s, "SELECT COUNT(*) FROM folders", []).unwrap()[0][0], "0");
+}
+
+@test
+fn new_siblings_go_last() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let r1 = store.create_request(s, model.new_request(p.id, 0, "one")).unwrap();
+    let r2 = store.create_request(s, model.new_request(p.id, 0, "two")).unwrap();
+    assert(r2.position > r1.position);
+    let d = store.duplicate_request(s, r1.id).unwrap();
+    assert_eq(d.name, "one copy");
+    assert(d.position > r2.position);
+}
+
+fn item(status: int) -> store.HistoryItem {
+    store.HistoryItem {
+        id: 0,
+        request_id: 0,
+        executed_at: 1000 + status,
+        method: "GET",
+        url: "http://x",
+        status: status,
+        ok: true,
+        duration_ms: 5,
+        size: 10
+    }
+}
+
+@test
+fn the_history_keeps_the_newest_entries() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let r = store.create_request(s, model.new_request(p.id, 0, "r")).unwrap();
+    var i = 0;
+    while (i < store.HISTORY_KEEP + 5) {
+        store.add_history(s, r.id, item(i), "{\"n\":${i}}").unwrap();
+        i = i + 1;
+    }
+    let hs = store.list_history(s, r.id).unwrap();
+    assert_eq(hs.len(), store.HISTORY_KEEP);
+    assert_eq(hs[0].status, store.HISTORY_KEEP + 4);
+    assert_eq(store.history_record(s, hs[0].id).unwrap(), "{\"n\":${store.HISTORY_KEEP + 4}}");
+    store.clear_history(s, r.id).unwrap();
+    assert_eq(store.list_history(s, r.id).unwrap().len(), 0);
+}
+
+@test
+fn settings_are_upserted() {
+    let s = fresh();
+    assert(store.get_setting(s, "language").unwrap().is_none());
+    store.set_setting(s, "language", "es").unwrap();
+    store.set_setting(s, "language", "en").unwrap();
+    assert_eq(store.get_setting(s, "language").unwrap().unwrap(), "en");
+    assert_eq(store.all_settings(s).unwrap().len(), 1);
+}
+
+@test
+fn text_with_quotes_and_unicode_is_stored_as_is() {
+    let s = fresh();
+    let p = store.create_project(s, "O'Brien \"quoted\" ñandú 🚀", "").unwrap();
+    assert_eq(store.get_project(s, p.id).unwrap().name, "O'Brien \"quoted\" ñandú 🚀");
+}
+
+@test
+fn the_history_never_touches_the_stored_request() {
+    // A send's record goes to the history; the request row stays the template it was saved as.
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    var r = model.new_request(p.id, 0, "r");
+    r.url = "http://a/{{template}}";
+    let saved = store.create_request(s, r).unwrap();
+    store.add_history(s, saved.id, item(200), "{}").unwrap();
+    assert_eq(store.get_request(s, saved.id).unwrap().url, "http://a/{{template}}");
+}

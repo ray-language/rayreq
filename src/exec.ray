@@ -1,0 +1,469 @@
+//! Sends a request: from the stored (or draft) `model.Request` to what goes on the wire
+//! (`prepare`), then the exchange itself with redirects and the timeout (`run`).
+//!
+//! `run` blocks its fiber for the whole exchange: the program calls it from a fiber of its own
+//! per send, so the window keeps answering.
+
+import std/time;
+import net/http;
+import cookies;
+import model;
+import urls;
+
+pub const USER_AGENT: string = "rayreq/0.1.0";
+
+/// A request ready to go: the URL parsed and encoded, the enabled headers (plus the defaults)
+/// and the body as bytes.
+pub struct Prepared {
+    method: string,
+    url: urls.Url,
+    headers: [(string, string)],
+    body: bytes,
+    timeout_ms: int,
+    follow_redirects: bool,
+    max_redirects: int,
+    /// Header names (lower case) that carry credentials besides the standard ones (an API key
+    /// header from the auth): they do not follow a redirect to another origin either.
+    credentials: [string],
+    /// The cookie jar of the send (a copy; updated hop by hop), when the request uses it.
+    use_jar: bool,
+    jar: [cookies.Cookie],
+}
+
+/// A redirect that was followed: who answered it and with what.
+pub struct Hop {
+    status: int,
+    method: string,
+    url: string,
+    location: string,
+}
+
+/// What was actually sent in the last exchange (after redirects), headers the HTTP client adds
+/// on its own included, for the "raw request" view.
+pub struct Sent {
+    method: string,
+    url: string,
+    headers: [(string, string)],
+    body: bytes,
+}
+
+pub struct Outcome {
+    ok: bool,
+    /// Why there is no response (connect failure, timeout, too many redirects…); "" when ok.
+    error: string,
+    status: int,
+    /// Names in lower case, in the order received; repeated names (Set-Cookie) kept.
+    headers: [(string, string)],
+    /// Decoded: a gzip body arrives already inflated (net/http does it).
+    body: bytes,
+    duration_ms: int,
+    /// Wall clock of the start, ms since the epoch.
+    started_at: int,
+    sent: Sent,
+    hops: [Hop],
+    /// Every Set-Cookie received with the URL that sent it, in order, redirects included (for
+    /// the stored jar); empty when the request does not use the jar.
+    set_cookies: [(string, string)],
+}
+
+// ---- prepare -------------------------------------------------------------------------------
+
+fn lower_names(hs: [(string, string)]) -> [string] {
+    var out: [string] = [];
+    for (k, _v) in hs {
+        out.push(k.to_lower());
+    }
+    out
+}
+
+/// A header name is an RFC 9110 token: no spaces, no separators, no control characters.
+fn valid_header_name(name: string) -> bool {
+    if (name == "") {
+        return false;
+    }
+    for c in name.chars() {
+        let n = char_code(c);
+        if (n <= 32 || n >= 127 || "()<>@,;:\\\"/[]?={}".contains(c.to_string())) {
+            return false;
+        }
+    }
+    true
+}
+
+fn content_type_of(body_type: string) -> string {
+    match (body_type) {
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "text" => "text/plain; charset=utf-8",
+        "form" => "application/x-www-form-urlencoded",
+        _ => "",
+    }
+}
+
+/// The enabled rows only, trimmed; a header with an invalid name or a line break in its value
+/// is an error (a value with CR/LF would inject headers of its own).
+pub fn prepare(r: model.Request) -> Result<Prepared, string> {
+    if (r.url == "") {
+        return Result.Err("the URL is empty");
+    }
+    let u = urls.parse(urls.with_scheme(r.url))?;
+    var headers: [(string, string)] = [];
+    for h in r.headers {
+        if (!h.enabled) {
+            continue;
+        }
+        let name = h.key.trim();
+        if (name == "" && h.value.trim() == "") {
+            continue;
+        }
+        if (!valid_header_name(name)) {
+            return Result.Err("invalid header name: '${name}'");
+        }
+        if (h.value.contains("\r") || h.value.contains("\n")) {
+            return Result.Err("the value of header '${name}' contains a line break");
+        }
+        headers.push((name, h.value.trim()));
+    }
+    let body = match (r.body_type) {
+        "none" => b"",
+        "form" => {
+            var fields: [(string, string)] = [];
+            for f in r.form {
+                if (f.enabled && f.key != "") {
+                    fields.push((f.key, f.value));
+                }
+            }
+            urls.form_encode(fields).to_bytes()
+        },
+        _ => r.body.to_bytes(),
+    };
+    let names = lower_names(headers);
+    let ctype = content_type_of(r.body_type);
+    if (ctype != "" && !names.contains("content-type")) {
+        headers.push(("Content-Type", ctype));
+    }
+    if (!names.contains("accept")) {
+        headers.push(("Accept", "*/*"));
+    }
+    if (!names.contains("user-agent")) {
+        headers.push(("User-Agent", USER_AGENT));
+    }
+    Result.Ok(
+        Prepared {
+            method: r.method,
+            url: u,
+            headers: headers,
+            body: body,
+            timeout_ms: r.timeout_ms,
+            follow_redirects: r.follow_redirects,
+            max_redirects: r.max_redirects,
+            credentials: [],
+            use_jar: false,
+            jar: []
+        }
+    )
+}
+
+// ---- run -----------------------------------------------------------------------------------
+
+struct Reply {
+    status: int,
+    headers: [(string, string)],
+    body: bytes,
+}
+
+/// net/http takes a Map: repeated names (case-insensitive) are joined with ", " (RFC 9110
+/// §5.3), keeping the spelling of the first. Cookie is joined with "; " (RFC 6265).
+fn header_map(hs: [(string, string)]) -> Map<string, string> {
+    let m: Map<string, string> = Map.new();
+    let spelled: Map<string, string> = Map.new();
+    for (k, v) in hs {
+        let low = k.to_lower();
+        match (spelled.get(low)) {
+            Option.Some(name) => {
+                let sep = if (low == "cookie") { "; " } else { ", " };
+                m.insert(name, m.get_or(name, "") + sep + v);
+            },
+            Option.None => {
+                spelled.insert(low, k);
+                m.insert(k, v);
+            },
+        }
+    }
+    m
+}
+
+/// The headers as they go out: ours, joined like `header_map`, plus the ones net/http adds
+/// by itself (observed on the wire: Host, Content-Length, Accept-Encoding, Connection).
+pub fn wire_headers(p: Prepared) -> [(string, string)] {
+    var out: [(string, string)] = [("Host", urls.authority(p.url))];
+    let m = header_map(p.headers);
+    var seen: [string] = [];
+    for (k, _v) in p.headers {
+        if (seen.contains(k.to_lower())) {
+            continue;
+        }
+        seen.push(k.to_lower());
+        // The key in the map is the first spelling.
+        for (mk, mv) in m {
+            if (mk.to_lower() == k.to_lower()) {
+                out.push((mk, mv));
+            }
+        }
+    }
+    if (p.body.len() > 0 || ["POST", "PUT", "PATCH"].contains(p.method)) {
+        if (!seen.contains("content-length")) {
+            out.push(("Content-Length", to_string(p.body.len())));
+        }
+    }
+    if (!seen.contains("accept-encoding")) {
+        out.push(("Accept-Encoding", "gzip"));
+    }
+    out.push(("Connection", "close"));
+    out
+}
+
+fn send_once(p: Prepared, timeout_ms: int) -> Result<Reply, string> {
+    let target = urls.render(p.url);
+    let hs = header_map(p.headers);
+    if (p.method == "HEAD") {
+        // request_bytes waits for a body a HEAD response never has (it fails with "truncated
+        // response"); the streaming client knows HEAD has none.
+        let idle = if (timeout_ms > 0) { timeout_ms } else { model.MAX_TIMEOUT_MS };
+        let s = http.stream_with("HEAD", target, p.body, hs, idle)?;
+        while (true) {
+            match (http.stream_read(s)?) {
+                Option.Some(_) => { },
+                Option.None => break,
+            }
+        }
+        http.stream_close(s);
+        var headers: [(string, string)] = [];
+        for (k, v) in s.headers {
+            headers.push((k.to_lower(), v));
+        }
+        return Result.Ok(Reply { status: s.status, headers: headers, body: b"" });
+    }
+    let r = http.request_bytes(p.method, target, p.body, hs, timeout_ms)?;
+    var headers: [(string, string)] = [];
+    for (k, v) in r.raw_headers {
+        headers.push((k.to_lower(), v));
+    }
+    Result.Ok(Reply { status: r.status, headers: headers, body: r.body })
+}
+
+pub fn is_redirect(status: int) -> bool {
+    [301, 302, 303, 307, 308].contains(status)
+}
+
+pub fn header_value(hs: [(string, string)], name: string) -> Option<string> {
+    let low = name.to_lower();
+    for (k, v) in hs {
+        if (k.to_lower() == low) {
+            return Option.Some(v);
+        }
+    }
+    Option.None
+}
+
+fn without(hs: [(string, string)], names: [string]) -> [(string, string)] {
+    var out: [(string, string)] = [];
+    for (k, v) in hs {
+        if (!names.contains(k.to_lower())) {
+            out.push((k, v));
+        }
+    }
+    out
+}
+
+/// The request that follows a redirect, as browsers (and Go's net/http) do it: 303 turns
+/// anything but HEAD into a GET without body; 301/302 do the same for a POST; 307/308 repeat
+/// the method and the body. Credentials never cross to another origin.
+pub fn follow(p: Prepared, status: int, next: urls.Url) -> Prepared {
+    let to_get = (status == 303 && p.method != "HEAD")
+        || ((status == 301 || status == 302) && p.method == "POST");
+    var headers = p.headers;
+    var body = p.body;
+    var method = p.method;
+    if (to_get) {
+        method = "GET";
+        body = b"";
+        headers = without(headers, ["content-type", "content-length"]);
+    }
+    if (urls.origin(next) != urls.origin(p.url)) {
+        headers = without(
+            headers,
+            ["authorization", "cookie", "proxy-authorization"] + p.credentials
+        );
+    }
+    Prepared {
+        method: method,
+        url: next,
+        headers: headers,
+        body: body,
+        timeout_ms: p.timeout_ms,
+        follow_redirects: p.follow_redirects,
+        max_redirects: p.max_redirects,
+        credentials: p.credentials,
+        use_jar: p.use_jar,
+        jar: p.jar
+    }
+}
+
+fn sent_of(p: Prepared) -> Sent {
+    Sent { method: p.method, url: urls.render(p.url), headers: wire_headers(p), body: p.body }
+}
+
+fn failed(
+    p: Prepared,
+    error: string,
+    start: int,
+    started_at: int,
+    hops: [Hop],
+    set_cookies: [(string, string)]
+) -> Outcome {
+    Outcome {
+        ok: false,
+        error: error,
+        status: 0,
+        headers: [],
+        body: b"",
+        duration_ms: time.monotonic_millis() - start,
+        started_at: started_at,
+        sent: sent_of(p),
+        hops: hops,
+        set_cookies: set_cookies
+    }
+}
+
+/// The names in the Cookie headers the user wrote: the jar does not send those again.
+fn hand_cookie_names(hs: [(string, string)]) -> [string] {
+    var out: [string] = [];
+    for (k, v) in hs {
+        if (k.to_lower() == "cookie") {
+            for part in v.split(";") {
+                out.push(part.split("=")[0].trim());
+            }
+        }
+    }
+    out
+}
+
+/// `p` as it goes on the wire for this hop: plus the jar's cookies for its URL.
+fn with_jar(p: Prepared, jar: [cookies.Cookie]) -> Prepared {
+    if (!p.use_jar) {
+        return p;
+    }
+    let cs = cookies.for_url(jar, p.url, time.now(), hand_cookie_names(p.headers));
+    if (cs.len() == 0) {
+        return p;
+    }
+    Prepared {
+        method: p.method,
+        url: p.url,
+        headers: p.headers + [("Cookie", cookies.header(cs))],
+        body: p.body,
+        timeout_ms: p.timeout_ms,
+        follow_redirects: p.follow_redirects,
+        max_redirects: p.max_redirects,
+        credentials: p.credentials,
+        use_jar: p.use_jar,
+        jar: jar
+    }
+}
+
+fn set_cookie_lines(hs: [(string, string)]) -> [string] {
+    var out: [string] = [];
+    for (k, v) in hs {
+        if (k == "set-cookie") {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// The whole exchange. The timeout covers every hop together (0 = none).
+pub fn run(first: Prepared) -> Outcome {
+    let start = time.monotonic_millis();
+    let started_at = time.now();
+    var p = first;
+    var hops: [Hop] = [];
+    var jar = first.jar;
+    var set_cookies: [(string, string)] = [];
+    while (true) {
+        var budget = 0;
+        if (p.timeout_ms > 0) {
+            budget = p.timeout_ms - (time.monotonic_millis() - start);
+            if (budget <= 0) {
+                return failed(
+                    with_jar(p, jar),
+                    "timed out after ${p.timeout_ms} ms",
+                    start,
+                    started_at,
+                    hops,
+                    set_cookies
+                );
+            }
+        }
+        let wire = with_jar(p, jar);
+        let reply = match (send_once(wire, budget)) {
+            Result.Ok(r) => r,
+            Result.Err(e) => return failed(wire, e, start, started_at, hops, set_cookies),
+        };
+        if (p.use_jar) {
+            // A cookie set by a redirect (a login's 302) goes with the next hop.
+            let lines = set_cookie_lines(reply.headers);
+            for line in lines {
+                set_cookies.push((urls.render(p.url), line));
+            }
+            jar = cookies.receive(jar, lines, p.url, time.now()).0;
+        }
+        if (p.follow_redirects && is_redirect(reply.status)) {
+            if let Option.Some(loc) = header_value(reply.headers, "location") {
+                if (hops.len() >= p.max_redirects) {
+                    return failed(
+                        wire,
+                        "too many redirects (the limit is ${p.max_redirects})",
+                        start,
+                        started_at,
+                        hops,
+                        set_cookies
+                    );
+                }
+                let next = match (urls.resolve(p.url, loc)) {
+                    Result.Ok(u) => u,
+                    Result.Err(e) => return failed(
+                        wire,
+                        "bad redirect Location '${loc}': ${e}",
+                        start,
+                        started_at,
+                        hops,
+                        set_cookies
+                    ),
+                };
+                hops.push(
+                    Hop {
+                        status: reply.status,
+                        method: p.method,
+                        url: urls.render(p.url),
+                        location: loc
+                    }
+                );
+                p = follow(p, reply.status, next);
+                continue;
+            }
+        }
+        return Outcome {
+            ok: true,
+            error: "",
+            status: reply.status,
+            headers: reply.headers,
+            body: reply.body,
+            duration_ms: time.monotonic_millis() - start,
+            started_at: started_at,
+            sent: sent_of(wire),
+            hops: hops,
+            set_cookies: set_cookies
+        };
+    }
+}

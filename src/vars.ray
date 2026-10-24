@@ -1,0 +1,284 @@
+//! `{{variables}}`: where a request's variables come from and how they replace the text.
+//! The rules (and the rikuest bugs they come from) are in docs/VARIABLES.md:
+//!
+//! - R1: every folder from the project's root down to the request's folder counts.
+//! - R2/R3: lowest first — for each folder from the root down, its defaults and then its
+//!   override for the active environment; then the active environment, which has the last word.
+//! - R4: a store error is an error, never an empty layer; unresolved names are reported.
+//! - R7: `scope` is the ONE function behind both the list the page shows and the send.
+//!
+//! `{{name}}` with `name` as `model.valid_variable_name` says; no nesting, no expressions, and
+//! a substituted value is not scanned again (no recursion, so no loops).
+
+import model;
+import store;
+
+/// The winning value of a variable and where it came from: `kind` is "folder",
+/// "folder_override" or "environment"; `source` the folder's or the environment's name.
+pub struct Var {
+    key: string,
+    value: string,
+    kind: string,
+    source: string,
+}
+
+/// One level of the precedence chain, lowest first.
+pub struct Layer {
+    kind: string,
+    source: string,
+    values: [model.Pair],
+}
+
+pub struct Scope {
+    /// 0 = the project has no active environment (only a hand-edited database).
+    environment_id: int,
+    environment: string,
+    /// In the order they were first defined, root first; each with its winning value.
+    vars: [Var],
+}
+
+/// The folders from the project's root down to `folder_id` (none for 0).
+pub fn ancestry(s: store.Store, folder_id: int) -> Result<[model.Folder], string> {
+    var up: [model.Folder] = [];
+    var cur = folder_id;
+    while (cur != 0) {
+        let f = store.get_folder(s, cur)?;
+        up.push(f);
+        cur = f.parent_id;
+        if (up.len() > 10000) {
+            return Result.Err("the folder tree has a cycle");
+        }
+    }
+    var down: [model.Folder] = [];
+    var i = up.len() - 1;
+    while (i >= 0) {
+        down.push(up[i]);
+        i = i - 1;
+    }
+    Result.Ok(down)
+}
+
+pub fn layers(s: store.Store, project_id: int, folder_id: int) -> Result<[Layer], string> {
+    let env = store.active_environment(s, project_id)?;
+    var out: [Layer] = [];
+    for f in ancestry(s, folder_id)? {
+        if (f.project_id != project_id) {
+            return Result.Err("folder ${f.id} belongs to another project");
+        }
+        out.push(
+            Layer { kind: "folder", source: f.name, values: store.folder_variables(s, f.id, 0)? }
+        );
+        if let Option.Some(e) = env {
+            out.push(
+                Layer {
+                    kind: "folder_override",
+                    source: f.name,
+                    values: store.folder_variables(s, f.id, e.id)?
+                }
+            );
+        }
+    }
+    if let Option.Some(e) = env {
+        out.push(
+            Layer {
+                kind: "environment",
+                source: e.name,
+                values: store.environment_variables(s, e.id)?
+            }
+        );
+    }
+    Result.Ok(out)
+}
+
+/// The enabled values of `ls`, a later layer replacing an earlier one.
+pub fn merge(ls: [Layer]) -> [Var] {
+    var order: [string] = [];
+    let won: Map<string, Var> = Map.new();
+    for l in ls {
+        for p in l.values {
+            if (!p.enabled) {
+                continue;
+            }
+            if (!order.contains(p.key)) {
+                order.push(p.key);
+            }
+            won.insert(p.key, Var { key: p.key, value: p.value, kind: l.kind, source: l.source });
+        }
+    }
+    var out: [Var] = [];
+    for k in order {
+        if let Option.Some(v) = won.get(k) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+pub fn scope(s: store.Store, project_id: int, folder_id: int) -> Result<Scope, string> {
+    let env = store.active_environment(s, project_id)?;
+    let (env_id, env_name) = match (env) {
+        Option.Some(e) => (e.id, e.name),
+        Option.None => (0, ""),
+    };
+    Result.Ok(
+        Scope {
+            environment_id: env_id,
+            environment: env_name,
+            vars: merge(layers(s, project_id, folder_id)?)
+        }
+    )
+}
+
+/// Where a request's variables come from: a stored request's project and folder are the
+/// store's (a tab's draft may predate a move); a draft or a deleted request uses its own.
+pub fn location(s: store.Store, r: model.Request) -> Result<(int, int), string> {
+    if (r.id > 0) {
+        if let Option.Some(stored) = store.find_request(s, r.id)? {
+            return Result.Ok((stored.project_id, stored.folder_id));
+        }
+    }
+    if (r.project_id == 0) {
+        return Result.Err("the request belongs to no project");
+    }
+    Result.Ok((r.project_id, r.folder_id))
+}
+
+pub fn values_of(vars: [Var]) -> Map<string, string> {
+    let m: Map<string, string> = Map.new();
+    for v in vars {
+        m.insert(v.key, v.value);
+    }
+    m
+}
+
+fn add_missing(into: [string], names: [string]) -> [string] {
+    var out = [] + into;
+    for n in names {
+        if (!out.contains(n)) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// `text` with every `{{name}}` that has a value replaced, and the names that had none (they
+/// stay in the text as written). Braces that do not form a valid name are left alone.
+pub fn expand(text: string, values: Map<string, string>) -> (string, [string]) {
+    var out = "";
+    var missing: [string] = [];
+    var rest = text;
+    while (true) {
+        let i = match (rest.index_of("{{")) {
+            Option.Some(i) => i,
+            Option.None => {
+                out = out + rest;
+                break;
+            },
+        };
+        out = out + rest.substring(0, i);
+        let after = rest.substring(i + 2, rest.len());
+        let j = match (after.index_of("}}")) {
+            Option.Some(j) => j,
+            Option.None => {
+                out = out + rest.substring(i, rest.len());
+                break;
+            },
+        };
+        let name = after.substring(0, j);
+        if (!model.valid_variable_name(name)) {
+            // `{{{x}}}`, `{{ a b }}`: keep one brace and look again from the next one.
+            out = out + "{";
+            rest = rest.substring(i + 1, rest.len());
+            continue;
+        }
+        match (values.get(name)) {
+            Option.Some(v) => out = out + v,
+            Option.None => {
+                out = out + "{{" + name + "}}";
+                if (!missing.contains(name)) {
+                    missing.push(name);
+                }
+            },
+        }
+        rest = after.substring(j + 2, after.len());
+    }
+    (out, missing)
+}
+
+fn expand_pairs(ps: [model.Pair], values: Map<string, string>) -> ([model.Pair], [string]) {
+    var out: [model.Pair] = [];
+    var missing: [string] = [];
+    for p in ps {
+        if (!p.enabled) {
+            out.push(p);
+            continue;
+        }
+        let (k, mk) = expand(p.key, values);
+        let (v, mv) = expand(p.value, values);
+        missing = add_missing(add_missing(missing, mk), mv);
+        out.push(model.Pair { key: k, value: v, enabled: true });
+    }
+    (out, missing)
+}
+
+/// A copy of `r` with its variables replaced in what is sent (URL, params, enabled headers,
+/// the body of its type, the fields of its auth's kind), and the names left unresolved. Never
+/// the name, never `r` itself.
+pub fn resolve_request(r: model.Request, vars: [Var]) -> (model.Request, [string]) {
+    let values = values_of(vars);
+    // A copy (structs are shared on assignment): `r` is the template and stays as it is. Every
+    // field changed below is reassigned, never mutated, so the shallow copy is enough.
+    var out = r.clone();
+    let (url, m_url) = expand(r.url, values);
+    out.url = url;
+    var missing = m_url;
+    let (params, m_params) = expand_pairs(r.params, values);
+    out.params = params;
+    missing = add_missing(missing, m_params);
+    let (headers, m_headers) = expand_pairs(r.headers, values);
+    out.headers = headers;
+    missing = add_missing(missing, m_headers);
+    if (r.body_type == "form") {
+        let (form, m_form) = expand_pairs(r.form, values);
+        out.form = form;
+        missing = add_missing(missing, m_form);
+    } else if (r.body_type != "none") {
+        let (body, m_body) = expand(r.body, values);
+        out.body = body;
+        missing = add_missing(missing, m_body);
+    }
+    let (a, m_auth) = expand_auth(r.auth, values);
+    out.auth = a;
+    missing = add_missing(missing, m_auth);
+    (out, missing)
+}
+
+/// The fields of the auth's kind with their variables replaced (the others stay as they are).
+fn expand_auth(a: model.Auth, values: Map<string, string>) -> (model.Auth, [string]) {
+    var out = model.auth_of_kind(a.kind);
+    out.username = a.username;
+    out.password = a.password;
+    out.token = a.token;
+    out.key = a.key;
+    out.value = a.value;
+    out.add_to = a.add_to;
+    var missing: [string] = [];
+    if (a.kind == "basic") {
+        let (u, mu) = expand(a.username, values);
+        let (p, mp) = expand(a.password, values);
+        out.username = u;
+        out.password = p;
+        missing = add_missing(mu, mp);
+    } else if (a.kind == "bearer") {
+        let (t, mt) = expand(a.token, values);
+        out.token = t;
+        missing = mt;
+    } else if (a.kind == "apikey") {
+        let (k, mk) = expand(a.key, values);
+        let (v, mv) = expand(a.value, values);
+        out.key = k;
+        out.value = v;
+        missing = add_missing(mk, mv);
+    }
+    (out, missing)
+}

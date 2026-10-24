@@ -1,0 +1,468 @@
+// OpenAPI and Swagger descriptions as requests: what each part of a description becomes, what
+// is left out (and said), and the import through the page protocol into the store.
+
+import std/fs;
+import std/json;
+import api;
+import model;
+import openapi;
+import store;
+import vars;
+
+fn imported(text: string) -> openapi.Imported {
+    match (openapi.parse(text)) {
+        Result.Ok(i) => i,
+        Result.Err(e) => panic(e),
+    }
+}
+
+fn find(i: openapi.Imported, method: string, url: string) -> model.Request {
+    for r in i.requests {
+        if (r.method == method && r.url == url) {
+            return r;
+        }
+    }
+    for g in i.groups {
+        for r in g.requests {
+            if (r.method == method && r.url == url) {
+                return r;
+            }
+        }
+    }
+    panic("no ${method} ${url}")
+}
+
+fn pair_text(ps: [model.Pair]) -> [string] {
+    ps.map(fn(p: model.Pair) -> string { "${p.key}=${p.value}" + if (p.enabled) { "" } else { " (off)" } })
+}
+
+fn has_warning(i: openapi.Imported, part: string) -> bool {
+    i.warnings.filter(fn(w: string) -> bool { w.contains(part) }).len() > 0
+}
+
+const SHOP: string = `openapi: 3.0.3
+info:
+  title: Shop API
+  version: "2"
+servers:
+  - url: https://{region}.shop.example/v1/
+    variables:
+      region: {default: eu}
+  - url: https://staging.shop.example/v1
+security:
+  - bearer: []
+tags:
+  - name: orders
+  - name: products
+  - name: unused
+paths:
+  /products:
+    get:
+      tags: [products]
+      summary: List products
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, example: red shoes}
+        - $ref: '#/components/parameters/Limit'
+        - name: X-Trace
+          in: header
+          schema: {type: string}
+        - name: Accept
+          in: header
+          schema: {type: string}
+        - name: session
+          in: cookie
+          example: abc
+    post:
+      tags: [products]
+      operationId: createProduct
+      security:
+        - apiKey: []
+      requestBody:
+        content:
+          application/xml:
+            schema: {type: string}
+          application/json:
+            schema: {$ref: '#/components/schemas/Product'}
+  /products/{product-id}:
+    parameters:
+      - name: product-id
+        in: path
+        required: true
+        schema: {type: integer, example: 42}
+    get:
+      tags: [products]
+      summary: |
+        Get a product
+        (longer description)
+      security: []
+    patch:
+      tags: [products]
+      requestBody:
+        content:
+          application/merge-patch+json:
+            example: {price: 10}
+  /orders/{orderId}:
+    put:
+      tags: [orders]
+      summary: Replace an order
+      parameters:
+        - {name: orderId, in: path, required: true, schema: {type: string}}
+      security:
+        - bearer: []
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: {type: string, enum: [open, closed]}
+                note: {type: string}
+                id: {type: string, readOnly: true}
+    delete:
+      tags: [orders]
+      security:
+        - oauth: [write]
+  /upload:
+    post:
+      requestBody:
+        content:
+          multipart/form-data:
+            schema: {type: object}
+    trace:
+      summary: trace it
+  /health:
+    get:
+      summary: Health
+      servers: [{url: https://other.example}]
+  x-internal: {}
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, default: 20}
+  schemas:
+    Product:
+      type: object
+      required: [name]
+      properties:
+        id: {type: integer, readOnly: true}
+        name: {type: string}
+        price: {type: number}
+        tags:
+          type: array
+          items: {type: string}
+        created: {type: string, format: date-time}
+        category: {$ref: '#/components/schemas/Category'}
+        owner:
+          allOf:
+            - {$ref: '#/components/schemas/Named'}
+            - type: object
+              properties:
+                email: {type: string, format: email}
+        kind:
+          oneOf:
+            - {type: string, enum: [physical, digital]}
+            - {type: integer}
+        status: {type: [string, "null"], default: draft}
+    Category:
+      type: object
+      properties:
+        name: {type: string, example: Shoes}
+        parent: {$ref: '#/components/schemas/Category'}
+    Named:
+      type: object
+      properties:
+        name: {type: string}
+  securitySchemes:
+    bearer: {type: http, scheme: bearer}
+    apiKey: {type: apiKey, in: header, name: X-API-Key}
+    oauth:
+      type: oauth2
+      flows: {}
+`;
+
+@test
+fn folders_variables_and_auth_of_the_whole_api() {
+    let i = imported(SHOP);
+    assert_eq(i.title, "Shop API");
+    // The first server, its variables filled in, no trailing slash; the path variable with
+    // an example is defined, the one without is left for the send to report.
+    assert_eq(pair_text(i.variables), ["baseUrl=https://eu.shop.example/v1", "product-id=42"]);
+    assert_eq((i.auth.kind, i.auth.token), ("bearer", "{{token}}"));
+    // The tags' order; a tag with no operation makes no folder; untagged operations at the top.
+    assert_eq(i.groups.map(fn(g: openapi.Group) -> string { g.name }), ["orders", "products"]);
+    assert_eq(
+        i.requests.map(fn(r: model.Request) -> string { r.name }),
+        ["POST /upload", "Health"]
+    );
+    assert_eq(openapi.count(i), 8);
+}
+
+@test
+fn parameters_become_the_url_params_and_headers() {
+    let r = find(imported(SHOP), "GET", "{{baseUrl}}/products?q=red%20shoes");
+    assert_eq(r.name, "List products");
+    assert_eq(pair_text(r.params), ["q=red%20shoes", "limit=20 (off)"]);
+    // Accept is the client's business (OpenAPI says so); a cookie parameter is a Cookie header.
+    assert_eq(pair_text(r.headers), ["X-Trace= (off)", "Cookie=session=abc"]);
+    assert_eq((r.auth.kind, r.body_type), ("inherit", "none"));
+    let one = find(imported(SHOP), "GET", "{{baseUrl}}/products/{{product-id}}");
+    assert_eq(one.name, "Get a product");
+    // security: [] = no auth for this one, whatever the API's default.
+    assert_eq(one.auth.kind, "none");
+}
+
+@test
+fn a_json_body_is_built_from_the_schema() {
+    let i = imported(SHOP);
+    let r = find(i, "POST", "{{baseUrl}}/products");
+    assert_eq(r.name, "createProduct");
+    assert_eq(
+        (r.auth.kind, r.auth.key, r.auth.value, r.auth.add_to),
+        ("apikey", "X-API-Key", "{{apiKey}}", "header")
+    );
+    assert_eq(r.body_type, "json");
+    assert_eq(r.body, `{
+  "name": "string",
+  "price": 0,
+  "tags": [
+    "string"
+  ],
+  "created": "2024-01-01T00:00:00Z",
+  "category": {
+    "name": "Shoes",
+    "parent": null
+  },
+  "owner": {
+    "name": "string",
+    "email": "user@example.com"
+  },
+  "kind": "physical",
+  "status": "draft"
+}`);
+    // JSON is what the json body type sends: no header for it.
+    assert_eq(r.headers.len(), 0);
+    let patch = find(i, "PATCH", "{{baseUrl}}/products/{{product-id}}");
+    assert_eq(patch.name, "PATCH /products/{product-id}");
+    assert_eq(patch.body, "{\n  \"price\": 10\n}");
+    assert_eq(pair_text(patch.headers), ["Content-Type=application/merge-patch+json"]);
+}
+
+@test
+fn a_form_body_and_what_is_left_out() {
+    let i = imported(SHOP);
+    let r = find(i, "PUT", "{{baseUrl}}/orders/{{orderId}}");
+    // The API's own auth: inherited, not repeated.
+    assert_eq(r.auth.kind, "inherit");
+    assert_eq(r.body_type, "form");
+    assert_eq(pair_text(r.form), ["status=open", "note= (off)"]);
+    let d = find(i, "DELETE", "{{baseUrl}}/orders/{{orderId}}");
+    assert_eq((d.auth.kind, d.auth.token), ("bearer", "{{accessToken}}"));
+    assert(has_warning(i, "OAuth 2"));
+    assert(has_warning(i, "POST /upload: multipart"));
+    assert(has_warning(i, "TRACE /upload"));
+    assert(has_warning(i, "servers given for single paths"));
+    assert(has_warning(i, "names 2 servers"));
+}
+
+@test
+fn swagger_2() {
+    let i = imported(
+        `{
+  "swagger": "2.0",
+  "info": {"title": "Old API"},
+  "host": "api.example.com",
+  "basePath": "/v2",
+  "schemes": ["http", "https"],
+  "consumes": ["application/json"],
+  "securityDefinitions": {"basic": {"type": "basic"}, "key": {"type": "apiKey", "in": "query", "name": "api_key"}},
+  "security": [{"key": []}],
+  "paths": {
+    "/users/{id}": {
+      "put": {
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "type": "integer", "x-example": 7},
+          {"name": "body", "in": "body", "schema": {"$ref": "#/definitions/User"}}
+        ],
+        "security": [{"basic": []}]
+      }
+    },
+    "/avatars": {
+      "post": {
+        "consumes": ["multipart/form-data"],
+        "parameters": [
+          {"name": "name", "in": "formData", "type": "string", "required": true, "default": "me"},
+          {"name": "file", "in": "formData", "type": "file"}
+        ]
+      }
+    }
+  },
+  "definitions": {"User": {"type": "object", "properties": {"name": {"type": "string"}, "age": {"type": "integer"}}}}
+}`
+    );
+    assert_eq(pair_text(i.variables), ["baseUrl=https://api.example.com/v2", "id=7"]);
+    assert_eq((i.auth.kind, i.auth.key, i.auth.add_to), ("apikey", "api_key", "query"));
+    let put = find(i, "PUT", "{{baseUrl}}/users/{{id}}");
+    assert_eq((put.auth.kind, put.auth.username), ("basic", "{{username}}"));
+    assert_eq(put.body, "{\n  \"name\": \"string\",\n  \"age\": 0\n}");
+    let post = find(i, "POST", "{{baseUrl}}/avatars");
+    assert_eq((post.body_type, pair_text(post.form)), ("form", ["name=me"]));
+    assert(has_warning(i, "POST /avatars: file uploads"));
+    // No tags: grouped by path.
+    assert_eq(i.groups.map(fn(g: openapi.Group) -> string { g.name }), ["users", "avatars"]);
+}
+
+@test
+fn untagged_paths_group_after_their_shared_prefix() {
+    let i = imported(`openapi: 3.1.0
+info: {title: T}
+servers: [{url: /api}]
+paths:
+  /v1/customers: {get: {}}
+  /v1/customers/{id}: {get: {}}
+  /v1/charges: {post: {}}
+`);
+    assert_eq(i.groups.map(fn(g: openapi.Group) -> string { g.name }), ["customers", "charges"]);
+    assert(has_warning(i, "is relative"));
+}
+
+@test
+fn self_references_and_broken_references_end() {
+    let i = imported(`openapi: 3.0.0
+info: {title: T}
+servers: [{url: "http://h"}]
+paths:
+  /a:
+    post:
+      parameters:
+        - $ref: 'other.yaml#/components/parameters/P'
+        - $ref: '#/components/parameters/Missing'
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Node'}
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        children: {type: array, items: {$ref: '#/components/schemas/Node'}}
+`);
+    let r = find(i, "POST", "{{baseUrl}}/a");
+    assert_eq(r.body, "{\n  \"children\": []\n}");
+    assert(has_warning(i, "other files are not followed: other.yaml"));
+    assert(has_warning(i, "a reference to nothing: #/components/parameters/Missing"));
+}
+
+@test
+fn what_is_not_an_openapi_description() {
+    for (text, want) in [
+        ("", "empty"),
+        ("[1, 2]", "expected an object"),
+        ("a: 1", "no 'openapi' or 'swagger'"),
+        ("swagger: '1.2'", "Swagger 1.2 is not supported"),
+        ("openapi: 4.0.0", "OpenAPI 4.0.0 is not supported"),
+        ("{\"openapi\": ", "JSON, line 1"),
+        ("openapi: 3.0.0\n  bad: indent", "YAML, line 2")
+    ] {
+        match (openapi.parse(text)) {
+            Result.Ok(_) => panic("accepted ${text}"),
+            Result.Err(e) => assert_eq_msg(e.contains(want), true, e),
+        }
+    }
+}
+
+// ---- through the page protocol -------------------------------------------------------------
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-openapi").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+fn import_op(s: store.Store, body: string) -> json.Json {
+    match (api.handle(s, body)) {
+        api.Action.ImportSpec(job) => {
+            let out = json.parse(api.store_spec(s, job, api.read_spec(job))).unwrap();
+            if (!json.get_bool(out, "ok").unwrap_or(false)) {
+                panic(json.stringify(out));
+            }
+            json.member(out, "value").unwrap()
+        },
+        api.Action.Reply(x) => panic(x),
+        _ => panic("expected an import"),
+    }
+}
+
+@test
+fn an_import_lands_in_the_store_and_its_variables_resolve() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let parent = store.create_folder(s, p.id, 0, "APIs").unwrap();
+    let dir = fs.make_temp_dir("rayreq-spec").unwrap();
+    fs.write_file(dir + "/shop.yaml", SHOP).unwrap();
+    let out = import_op(
+        s,
+        "{\"op\":\"openapi.import\",\"project_id\":${p.id},\"folder_id\":${parent.id},\"path\":${json.stringify(json.Json.JStr(dir + "/shop.yaml"))}}"
+    );
+    assert_eq(json.get_int(out, "requests").unwrap(), 8);
+    assert_eq(json.get_int(out, "folders").unwrap(), 3);
+    assert_eq(json.get_string(out, "title").unwrap(), "Shop API");
+    let top = store.get_folder(s, json.get_int(out, "folder_id").unwrap()).unwrap();
+    assert_eq((top.parent_id, top.auth.kind), (parent.id, "bearer"));
+    let folders = store.list_folders(s, p.id).unwrap();
+    assert_eq(folders.filter(fn(f: model.Folder) -> bool { f.parent_id == top.id }).len(), 2);
+    let requests = store.list_requests(s, p.id).unwrap();
+    assert_eq(requests.len(), 8);
+    // The folder's variables reach its requests through the one resolver.
+    var get_one = requests[0];
+    for r in requests {
+        if (r.url == "{{baseUrl}}/products/{{product-id}}" && r.method == "GET") {
+            get_one = r;
+        }
+    }
+    let (resolved, missing) = vars.resolve_request(
+        get_one,
+        vars.scope(s, p.id, get_one.folder_id).unwrap().vars
+    );
+    assert_eq(resolved.url, "https://eu.shop.example/v1/products/42");
+    assert_eq(missing.len(), 0);
+}
+
+@test
+fn a_failed_import_leaves_nothing_behind() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    match (api.handle(
+        s,
+        "{\"op\":\"openapi.import\",\"project_id\":${p.id},\"folder_id\":0,\"text\":\"openapi: 9\"}"
+    )) {
+        api.Action.ImportSpec(job) => {
+            let out = json.parse(api.store_spec(s, job, api.read_spec(job))).unwrap();
+            assert_eq(json.get_bool(out, "ok").unwrap(), false);
+        },
+        _ => panic("expected an import"),
+    }
+    // A store error halfway (a variable name the store refuses) rolls the folder back too.
+    var bad = imported(SHOP);
+    bad.variables.push(model.Pair { key: "bad name", value: "", enabled: true });
+    let job = api.SpecJob { project_id: p.id, folder_id: 0, path: "", text: "" };
+    let out = json.parse(api.store_spec(s, job, Result.Ok(bad))).unwrap();
+    assert_eq(json.get_bool(out, "ok").unwrap(), false);
+    assert_eq(store.list_folders(s, p.id).unwrap().len(), 0);
+    assert_eq(store.list_requests(s, p.id).unwrap().len(), 0);
+    // Nothing to import, or a folder of another project, is refused before any work.
+    for body in [
+        "{\"op\":\"openapi.import\",\"project_id\":${p.id},\"text\":\"  \"}",
+        "{\"op\":\"openapi.import\",\"project_id\":${p.id},\"folder_id\":999,\"text\":\"x\"}"
+    ] {
+        match (api.handle(s, body)) {
+            api.Action.Reply(x) => assert(x.contains("\"ok\":false")),
+            _ => panic("accepted ${body}"),
+        }
+    }
+}

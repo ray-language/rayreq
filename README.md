@@ -1,0 +1,130 @@
+# RayReq
+
+A REST client for the desktop, written in raylang with ray-elements: projects, nested
+folders, saved requests, a response viewer and per-request history. Its model is rikuest
+(`labs/rikuest`, Go + React); this is the raylang version and an app that dogfoods raylang.
+
+```sh
+make run        # open the app
+make test       # 139 tests: URLs, sending, the store, variables, auth, cookies, cURL, OpenAPI…
+make check      # the real page driven through a send against a local server
+make            # every target
+```
+
+## What it does
+
+- **Projects** with **nested folders** and **requests**: create, rename, duplicate, move (drag
+  and drop or "Move to…"), delete; a filter and a command palette (⌘K) to find them.
+- **Request builder**: method, URL, a params table kept in sync with the URL's query (disabled
+  rows are kept and not sent), headers, body (JSON, text, XML, form-urlencoded) with JSON
+  validation and formatting, and per-request settings (timeout, redirects).
+- **Several requests open in tabs**, with an unsaved mark per tab and on the window; closing a
+  tab or quitting with changes asks first.
+- **Sending** never blocks the window (each send runs in a fiber of its own) and can be
+  cancelled. Redirects are followed the way browsers do (303, and 301/302 after a POST, become
+  a GET; 307/308 repeat the request), up to a limit, and **credentials never cross to another
+  origin**.
+- **Response**: status, time, size (and the size on the wire when it came compressed), the body
+  pretty-printed or raw (64-bit numbers untouched), an image preview, binary bodies kept as bytes
+  and saved to a file as they came, the headers (repeated `Set-Cookie` kept), the request as it was
+  actually sent (including what the HTTP client adds) and the redirects.
+- **History**: the last 50 executions of each request, each one reopenable.
+- **Environments and `{{variables}}`** (phase 2): every project has at least one environment and
+  exactly one active (picker in the top bar, ⌘E to manage). Folders hold defaults for everything
+  below them, with an optional value per environment; the active environment has the last word.
+  The **Variables** tab lists what a request resolves to and where each value comes from (the same
+  code the send uses), the resolved URL is shown under the URL bar, and an unresolved `{{name}}`
+  is reported (or blocks the send, if you choose).
+- **Captures**: after a 2xx JSON response, values at JSON paths (`data.items[0].id`) are written
+  into the environment the request was resolved with — as written in the body, so 64-bit ids
+  survive — and each capture reports what happened to it.
+- **Auth**: Basic, Bearer or an API key (header or query) per request, or set on a folder for
+  every request below that inherits it (the nearest folder with one wins; "No auth" on a folder
+  stops the inheritance). Its fields take `{{variables}}` (a captured token in `Bearer
+  {{token}}`), the tab says where an inherited auth comes from, a header written by hand with
+  the same name wins, and credentials (an API key header too) never follow a redirect to
+  another origin.
+- **Cookie jar**, one per environment: cookies set by a response (a login's redirect included)
+  go with the next hops and the next sends, by the rules browsers use (domain and host-only,
+  path, Secure, Max-Age/Expires capped at 400 days, `__Secure-`/`__Host-`); a cookie the rules
+  refuse is reported with the reason. Session cookies end when RayReq starts again. The jar can
+  be viewed and emptied (Request ▸ Cookies…), and a request can opt out in its settings.
+- **cURL in and out**: File ▸ Import cURL… (⇧⌘I) turns a curl command — as browsers copy it,
+  `$'…'` quoting included — into a new request; pasting one into the URL field fills the open
+  request. Method, headers, body (JSON, XML, text or form, by its Content-Type), `-u` and
+  `--oauth2-bearer` as auth, `-G`, `-L`, `--max-time` and cookies are kept; whatever cannot be
+  (files, `-F` multipart, `-k`, unknown options) is listed. Copy as cURL (⇧⌘C, or the terminal
+  button by the URL) writes what the send would do: variables resolved, auth applied, the jar's
+  cookies.
+- **OpenAPI import**: File ▸ Import OpenAPI… (⇧⌘O), or a folder's menu, takes an OpenAPI 3.0/3.1
+  or Swagger 2.0 description — a file (YAML or JSON) or pasted text — and makes a folder named
+  after the API, a subfolder per tag (by path when there are no tags) and a request per
+  operation, in the document's order. The server's URL becomes the folder variable `baseUrl`,
+  path parameters become `{{variables}}` (defined when the description gives an example),
+  query and header parameters fill the tables (the optional ones off), bodies come from the
+  media type's example or are built from the schema, and the security schemes become the
+  folder's and requests' auth with the credentials as `{{variables}}` for your environments.
+  Nothing is invented: a value the description does not give stays empty or undefined (the
+  send names it). Multipart bodies, OAuth 2 flows and references to other files are listed as
+  not imported. Large descriptions are read in the background (GitHub's 10 MB one: ~0.7 s in
+  the native build, a few seconds under `ray run`).
+- English and Spanish; light and dark themes; native menus with shortcuts.
+
+The rules for variables, and the rikuest bugs they come from, are in
+[docs/VARIABLES.md](docs/VARIABLES.md).
+
+Not yet: OAuth 2 flows, collection runner, multipart bodies.
+
+## How it is built
+
+```
+src/main.ray       the window and the one loop that owns it and the database
+src/api.ray        the page ↔ program protocol (window.ray.request → {ok, value})
+src/exec.ray       prepare a request and run the exchange (redirects, timeout, HEAD)
+src/urls.ray       URL parsing, percent-encoding without double encoding, Location resolution
+src/vars.ray       {{variables}}: the precedence chain (folders → environment) and substitution
+src/auth.ray       which auth applies (own or inherited) and the header/parameter it adds
+src/cookies.ray    the cookie jar's rules (RFC 6265): Set-Cookie in, Cookie header out
+src/curl.ray       curl commands: bash word splitting, options → request, send → command
+src/openapi.ray    OpenAPI 3.x / Swagger 2.0 → folders, requests, variables and auth
+src/yaml.ray       YAML (the subset API descriptions use) into an ordered tree
+src/node.ray       that ordered tree, JSON in and out (keys in order, numbers as written)
+src/captures.ray   captures: response values into the environment, each with its status
+src/jpath.ray      a value at a JSON path, read from the text (numbers as written)
+src/view.ray       an outcome as the page shows it and as the history stores it
+src/store.ray      SQLite: schema migrations, projects, environments, folders, requests,
+                   variables, history, settings
+src/model.ray      the data and its JSON
+src/menus.ray      the menu bar (English/Spanish)
+src/selfcheck.ray  `--check`: the local echo server and the verdict
+www/               the page: plain HTML + ES modules on ray-elements, no build step
+tests/             raylang tests (the HTTP ones run a local server on port 0)
+```
+
+The program owns the data and the network; the page only edits drafts and paints. UI events
+reach the main loop through a forwarding fiber, and each send posts its outcome to the same
+inbox, so the loop never waits on the network. Stored requests are templates: a send resolves
+its variables on a copy (resolve → prepare → run), and its result goes to the history, never
+back into the request.
+
+The database lives in `~/Library/Application Support/RayReq/rayreq.db` (macOS),
+`$XDG_DATA_HOME/rayreq` or `~/.local/share/rayreq` (Linux), `%APPDATA%\RayReq` (Windows);
+`RAYREQ_DATA=<dir>` uses another directory.
+
+## Known limits
+
+- TLS certificate verification cannot be turned off (net/http has no option for it).
+- Repeated request headers with the same name are joined into one (`, `, or `; ` for
+  `Cookie`): net/http takes headers as a map.
+- Response bodies are read whole; the page shows up to 2 MB of text and the history keeps up to
+  5 MB per execution.
+- The header names of a response are shown in lower case (as net/http gives them).
+- A HEAD response keeps only one of several `Set-Cookie` headers (net/http's streaming client,
+  which HEAD needs, gives the headers as a map).
+- There is no public-suffix list: a cookie for a one-label domain (`com`) is refused, but one
+  for `co.uk` from `a.co.uk` is accepted.
+- Passwords, tokens, cookies and variable values are stored as plain text in the local database, and the
+  history keeps the headers as sent (Authorization included), like the request view shows them.
+
+What raylang, net, db and ray-elements made hard is recorded in
+`../findings/open/rayreq-1.27.79.md`.

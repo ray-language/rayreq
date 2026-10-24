@@ -1,0 +1,94 @@
+//! The menu bar, in the page's language. Every item's tag goes to the page as is (the page
+//! owns the tabs and the drafts); the command palette lists the same items through the bridge.
+
+import std/ui;
+import elements/bridge;
+
+fn tr(lang: string, en: string, es: string) -> string {
+    if (lang == "es") { es } else { en }
+}
+
+pub fn file_menu(lang: string) -> [ui.MenuItem] {
+    [
+        ui.item("new-request", tr(lang, "New Request", "Nueva petición"), "cmd+n"),
+        ui.item("new-folder", tr(lang, "New Folder", "Nueva carpeta"), "cmd+shift+n"),
+        ui.item("new-project", tr(lang, "New Project…", "Nuevo proyecto…"), ""),
+        ui.item("import-curl", tr(lang, "Import cURL…", "Importar cURL…"), "cmd+shift+i"),
+        ui.item("import-openapi", tr(lang, "Import OpenAPI…", "Importar OpenAPI…"), "cmd+shift+o"),
+        ui.separator(),
+        ui.item("save", tr(lang, "Save", "Guardar"), "cmd+s"),
+        ui.item("close-tab", tr(lang, "Close Tab", "Cerrar pestaña"), "cmd+w")
+    ]
+}
+
+pub fn request_menu(lang: string) -> [ui.MenuItem] {
+    [
+        ui.item("send", tr(lang, "Send", "Enviar"), "cmd+enter"),
+        ui.item("duplicate", tr(lang, "Duplicate", "Duplicar"), "cmd+d"),
+        ui.item("copy-curl", tr(lang, "Copy as cURL", "Copiar como cURL"), "cmd+shift+c"),
+        ui.separator(),
+        ui.item("focus-url", tr(lang, "Go to URL", "Ir a la URL"), "cmd+l"),
+        ui.separator(),
+        ui.item("environments", tr(lang, "Manage Environments…", "Gestionar entornos…"), "cmd+e"),
+        ui.item("cookies", tr(lang, "Cookies…", "Cookies…"), "")
+    ]
+}
+
+pub fn view_menu(lang: string) -> [ui.MenuItem] {
+    [
+        ui.item("palette", tr(lang, "Command Palette…", "Paleta de comandos…"), "cmd+k"),
+        ui.item(
+            "toggle-sidebar",
+            tr(lang, "Toggle Sidebar", "Mostrar u ocultar la barra lateral"),
+            "cmd+b"
+        )
+    ]
+}
+
+fn edit_items() -> [ui.MenuItem] {
+    [
+        ui.item("role:undo", "", ""),
+        ui.item("role:redo", "", ""),
+        ui.separator(),
+        ui.item("role:cut", "", ""),
+        ui.item("role:copy", "", ""),
+        ui.item("role:paste", "", ""),
+        ui.separator(),
+        ui.item("role:select_all", "", "")
+    ]
+}
+
+/// The titles the bar was declared with: `replace_menu` finds a menu by its title and cannot
+/// rename it, so a language change relabels the items under the titles of the launch (the
+/// titles themselves follow the language from the next launch).
+pub struct Titles {
+    file: string,
+    request: string,
+    view: string,
+}
+
+pub fn titles(lang: string) -> Titles {
+    Titles {
+        file: tr(lang, "File", "Archivo"),
+        request: tr(lang, "Request", "Petición"),
+        view: tr(lang, "View", "Ver")
+    }
+}
+
+/// Declares the bar (before the first window: on Linux a menu only reaches windows opened
+/// after it).
+pub fn install(n: bridge.Native, lang: string) -> Result<Titles, string> {
+    let t = titles(lang);
+    bridge.menu(n, t.file, file_menu(lang))?;
+    ui.edit_menu(edit_items())?;
+    bridge.menu(n, t.request, request_menu(lang))?;
+    bridge.menu(n, t.view, view_menu(lang))?;
+    Result.Ok(t)
+}
+
+/// The same items in another language.
+pub fn relabel(n: bridge.Native, t: Titles, lang: string) -> Result<int, string> {
+    bridge.replace_menu(n, t.file, file_menu(lang))?;
+    bridge.replace_menu(n, t.request, request_menu(lang))?;
+    bridge.replace_menu(n, t.view, view_menu(lang))
+}

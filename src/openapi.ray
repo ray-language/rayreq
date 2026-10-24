@@ -1,0 +1,950 @@
+//! OpenAPI descriptions (3.0, 3.1 and Swagger 2.0; JSON or YAML) as rayreq requests: one
+//! request per operation, grouped in a folder per tag, the servers' URL as the `{{baseUrl}}`
+//! variable, path parameters as `{{variables}}` and the security schemes as auth.
+//!
+//! The import never invents values. A parameter takes its example, default or first enum
+//! value; one without any is left empty (a query parameter) or undefined (a path variable, so
+//! the send names it as unresolved instead of sending a placeholder). Bodies are the media
+//! type's example, else one built from the schema (`"string"`, `0`, `true`…, the first of a
+//! oneOf/anyOf, read-only properties left out). Credentials are `{{variables}}` too: they
+//! belong in an environment, never in the imported folder.
+//!
+//! What cannot be imported (multipart bodies, OAuth 2 flows, cookie API keys, other files'
+//! `$ref`s…) is listed in `warnings`.
+
+import std/url;
+import model;
+import node;
+import yaml;
+from node import Node;
+
+pub struct Group {
+    name: string,
+    requests: [model.Request],
+}
+
+/// What the import creates: a folder named `title` with `variables` and `auth`, holding
+/// `requests` (the untagged operations) and a subfolder per group.
+pub struct Imported {
+    title: string,
+    variables: [model.Pair],
+    auth: model.Auth,
+    requests: [model.Request],
+    groups: [Group],
+    warnings: [string],
+}
+
+pub fn count(i: Imported) -> int {
+    var n = i.requests.len();
+    for g in i.groups {
+        n = n + g.requests.len();
+    }
+    n
+}
+
+/// A description larger than this is refused (a big public API is ~10 MB).
+pub const MAX_SIZE: int = 32 * 1024 * 1024;
+
+const MAX_WARNINGS: int = 40;
+
+/// The longest a request or folder name can be (the store's limit).
+const MAX_NAME: int = 200;
+
+/// How much of a schema an example body takes (nodes): some descriptions nest every object
+/// in every other one.
+const SAMPLE_BUDGET: int = 400;
+
+const SAMPLE_DEPTH: int = 8;
+
+struct Ctx {
+    root: Node,
+    v2: bool,
+    schemes: [(string, Node)],
+    variables: [model.Pair],
+    warnings: [string],
+    budget: int,
+}
+
+fn warn(cx: Ctx, w: string) {
+    if (!cx.warnings.contains(w)) {
+        cx.warnings.push(w);
+    }
+}
+
+/// The text as a tree: JSON when it looks like JSON, YAML otherwise.
+pub fn read(text: string) -> Result<Node, string> {
+    if (text.len() > MAX_SIZE) {
+        return Result.Err("the description is too large (32 MB at most)");
+    }
+    let t = text.trim();
+    if (t == "") {
+        return Result.Err("the description is empty");
+    }
+    if (t.starts_with("{")) {
+        return node.parse_json(text);
+    }
+    yaml.parse(text)
+}
+
+pub fn parse(text: string) -> Result<Imported, string> {
+    convert(read(text)?)
+}
+
+pub fn convert(root: Node) -> Result<Imported, string> {
+    if (!node.is_obj(root)) {
+        return Result.Err("not an OpenAPI description: expected an object at the top");
+    }
+    let openapi = node.str_at(root, "openapi");
+    let swagger = node.str_at(root, "swagger");
+    let v2 = swagger.starts_with("2.");
+    if (!v2 && !openapi.starts_with("3.")) {
+        return Result.Err(if (swagger != "") {
+            "Swagger ${swagger} is not supported (OpenAPI 3.x and Swagger 2.0 are)"
+        } else if (openapi != "") {
+            "OpenAPI ${openapi} is not supported (3.x and Swagger 2.0 are)"
+        } else {
+            "not an OpenAPI description: it has no 'openapi' or 'swagger' field"
+        });
+    }
+    let schemes = if (v2) {
+        node.entries_at(root, "securityDefinitions")
+    } else {
+        node.entries_at(node.get(root, "components").unwrap_or(Node.Null), "securitySchemes")
+    };
+    var cx = Ctx { root: root, v2: v2, schemes: schemes, variables: [], warnings: [], budget: 0 };
+    let info = node.get(root, "info").unwrap_or(Node.Null);
+    var title = clip(first_line(node.str_at(info, "title")));
+    if (title == "") {
+        title = "API";
+    }
+    let base = base_url(cx);
+    if (base != "") {
+        cx.variables.push(model.Pair { key: "baseUrl", value: base, enabled: true });
+    }
+    let root_auth = match (node.get(root, "security")) {
+        Option.Some(sec) => auth_for(cx, sec),
+        Option.None => model.auth_of_kind("inherit"),
+    };
+
+    // The groups in the order of the top-level `tags`, then as the operations name them.
+    var groups: [Group] = [];
+    for t in node.items_at(root, "tags") {
+        let n = clip(node.str_at(t, "name"));
+        if (n != "" && group_index(groups, n) < 0) {
+            groups.push(Group { name: n, requests: [] });
+        }
+    }
+    var untagged: [model.Request] = [];
+    let paths = node.entries_at(root, "paths");
+    if (paths.len() == 0) {
+        warn(cx, "the description has no paths");
+    }
+    for (path, raw_item) in paths {
+        if (!path.starts_with("/")) {
+            continue;  // x- extensions
+        }
+        let item = deref(cx, raw_item);
+        for (key, raw_op) in node.entries(
+            item
+        ) {
+            let method = key.to_upper();
+            if (!["get", "put", "post", "delete", "options", "head", "patch", "trace"].contains(
+                key
+            )) {
+                continue;
+            }
+            if (!model.METHODS.contains(method)) {
+                warn(cx, "${method} ${path}: rayreq does not send ${method} requests; left out");
+                continue;
+            }
+            let op = deref(cx, raw_op);
+            if (node.has(op, "servers") || node.has(item, "servers")) {
+                warn(
+                    cx,
+                    "servers given for single paths or operations are ignored: every request uses {{baseUrl}}"
+                );
+            }
+            var r = request_for(cx, path, method, item, op);
+            r.auth = match (node.get(op, "security")) {
+                Option.Some(sec) => {
+                    let a = auth_for(cx, sec);
+                    if (model.auth_text(a) == model.auth_text(root_auth)) {
+                        model.auth_of_kind("inherit")
+                    } else {
+                        a
+                    }
+                },
+                Option.None => model.auth_of_kind("inherit"),
+            };
+            let tag = match (node.items_at(op, "tags").len()) {
+                0 => "",
+                _ => clip(node.text(node.items_at(op, "tags")[0]).unwrap_or("")),
+            };
+            if (tag == "") {
+                untagged.push(r);
+            } else {
+                var gi = group_index(groups, tag);
+                if (gi < 0) {
+                    groups.push(Group { name: tag, requests: [] });
+                    gi = groups.len() - 1;
+                }
+                groups[gi].requests.push(r);
+            }
+        }
+    }
+    if (groups.filter(fn(g: Group) -> bool { g.requests.len() > 0 }).len() == 0
+        && untagged.len() > 0) {
+        let (top, by) = by_path(untagged);
+        untagged = top;
+        groups = by;
+    }
+    var warnings = cx.warnings;
+    if (warnings.len() > MAX_WARNINGS) {
+        let more = warnings.len() - MAX_WARNINGS;
+        warnings = warnings.slice(0, MAX_WARNINGS);
+        warnings.push("… and ${more} more");
+    }
+    Result.Ok(
+        Imported {
+            title: title,
+            variables: cx.variables,
+            auth: root_auth,
+            requests: untagged,
+            groups: groups.filter(fn(g: Group) -> bool { g.requests.len() > 0 }),
+            warnings: warnings
+        }
+    )
+}
+
+/// The segments of a path up to its first `{parameter}`.
+fn segments(path: string) -> [string] {
+    var out: [string] = [];
+    for seg in path.split("/") {
+        if (seg == "") {
+            continue;
+        }
+        if (seg.contains("{")) {
+            break;
+        }
+        out.push(seg);
+    }
+    out
+}
+
+/// A description without tags, grouped by the first segment of the paths after the ones they
+/// all share (`/v1/customers/…` → "customers"); a path with no such segment stays at the top.
+fn by_path(requests: [model.Request]) -> ([model.Request], [Group]) {
+    let paths = requests.map(fn(r: model.Request) -> [string] { segments(r.url.strip_prefix("{{baseUrl}}").unwrap_or(r.url).split("?")[0]) });
+    var shared = 0;
+    while (paths.len() > 0 && shared < paths[0].len()) {
+        let seg = paths[0][shared];
+        if (paths
+            .filter(fn(p: [string]) -> bool { p.len() > shared + 1 && p[shared] == seg })
+            .len() != paths.len()) {
+            break;
+        }
+        shared = shared + 1;
+    }
+    var groups: [Group] = [];
+    var top: [model.Request] = [];
+    var i = 0;
+    while (i < requests.len()) {
+        if (paths[i].len() > shared) {
+            let name = clip(paths[i][shared]);
+            var gi = group_index(groups, name);
+            if (gi < 0) {
+                groups.push(Group { name: name, requests: [] });
+                gi = groups.len() - 1;
+            }
+            groups[gi].requests.push(requests[i]);
+        } else {
+            top.push(requests[i]);
+        }
+        i = i + 1;
+    }
+    (top, groups)
+}
+
+fn group_index(groups: [Group], name: string) -> int {
+    var i = 0;
+    while (i < groups.len()) {
+        if (groups[i].name == name) {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn first_line(s: string) -> string {
+    s.trim().split("\n")[0].trim()
+}
+
+fn clip(s: string) -> string {
+    let t = s.trim();
+    if (t.len() > MAX_NAME) { t.substring(0, MAX_NAME - 1).trim() + "…" } else { t }
+}
+
+// ---- references ----------------------------------------------------------------------------
+
+/// `n` with its `$ref` followed (and the target's, up to a few levels); a reference that
+/// cannot be followed is a warning and an empty object.
+fn deref(cx: Ctx, n: Node) -> Node {
+    var at = n;
+    var hops = 0;
+    while (hops < 16) {
+        let ref = match (node.get(at, "$ref")) {
+            Option.Some(r) => node.text(r).unwrap_or(""),
+            Option.None => return at,
+        };
+        at = match (node.pointer(cx.root, ref)) {
+            Option.Some(target) => target,
+            Option.None => {
+                if (ref.starts_with("#")) {
+                    warn(cx, "a reference to nothing: ${ref}");
+                } else {
+                    warn(cx, "references to other files are not followed: ${ref}");
+                }
+                return Node.Obj([]);
+            },
+        };
+        hops = hops + 1;
+    }
+    warn(cx, "a loop of references");
+    Node.Obj([])
+}
+
+// ---- servers -------------------------------------------------------------------------------
+
+fn base_url(cx: Ctx) -> string {
+    let base = if (cx.v2) {
+        let host = node.str_at(cx.root, "host");
+        if (host == "") {
+            warn(cx, "the description names no host: set baseUrl");
+            return "";
+        }
+        let schemes = node.items_at(cx.root, "schemes")
+            .map(fn(s: Node) -> string { node.text(s).unwrap_or("") });
+        let scheme = if (schemes.contains("https") || schemes.len() == 0) {
+            "https"
+        } else {
+            schemes[0]
+        };
+        "${scheme}://${host}${node.str_at(cx.root, "basePath")}"
+    } else {
+        let servers = node.items_at(cx.root, "servers");
+        if (servers.len() == 0) {
+            warn(cx, "the description names no server: set baseUrl");
+            return "";
+        }
+        if (servers.len() > 1) {
+            warn(cx, "the description names ${servers.len()} servers: baseUrl is the first one");
+        }
+        var u = node.str_at(servers[0], "url");
+        for (name, v) in node.entries_at(servers[0], "variables") {
+            u = u.replace("{" + name + "}", node.str_at(v, "default"));
+        }
+        if (u.starts_with("/") || u == "") {
+            warn(cx, "the server URL '${u}' is relative: put the host in front of it in baseUrl");
+        }
+        u
+    };
+    var b = base;
+    while (b.ends_with("/")) {
+        b = b.substring(0, b.len() - 1);
+    }
+    b
+}
+
+// ---- operations ----------------------------------------------------------------------------
+
+fn request_for(cx: Ctx, path: string, method: string, item: Node, op: Node) -> model.Request {
+    var name = first_line(node.str_at(op, "summary"));
+    if (name == "") {
+        name = node.str_at(op, "operationId");
+    }
+    if (name == "") {
+        name = "${method} ${path}";
+    }
+    var r = model.new_request(0, 0, clip(name));
+    r.method = method;
+    let params = parameters(cx, item, op);
+    var target = path_with_variables(cx, path, params);
+    var on: [model.Pair] = [];
+    var off: [model.Pair] = [];
+    var cookies: [string] = [];
+    for p in params {
+        let where = node.str_at(p, "in");
+        let pname = node.str_at(p, "name");
+        let required = node.bool_at(p, "required");
+        if (pname == "") {
+            continue;
+        }
+        let value = match (explicit_value(cx, p)) {
+            Option.Some(v) => value_text(v),
+            Option.None => "",
+        };
+        if (where == "query") {
+            let pair = model.Pair {
+                key: url.url_encode(pname),
+                value: url.url_encode(value),
+                enabled: required
+            };
+            if (required) {
+                on.push(pair);
+            } else {
+                off.push(pair);
+            }
+        } else if (where == "header") {
+            // OpenAPI: these three are described elsewhere (the body's type, the auth).
+            if (["accept", "content-type", "authorization"].contains(pname.to_lower())) {
+                continue;
+            }
+            r.headers.push(model.Pair { key: pname, value: value, enabled: required });
+        } else if (where == "cookie") {
+            cookies.push("${pname}=${value}");
+        }
+    }
+    if (cookies.len() > 0) {
+        r.headers.push(model.Pair { key: "Cookie", value: cookies.join("; "), enabled: true });
+    }
+    if (on.len() > 0) {
+        target = target + "?" + on.map(fn(p: model.Pair) -> string {
+            if (p.value == "") { p.key } else { "${p.key}=${p.value}" }
+        }).join("&");
+    }
+    r.url = "{{baseUrl}}" + target;
+    r.params = on + off;
+    let label = "${method} ${path}";
+    if (cx.v2) {
+        body_v2(cx, r, label, op, params);
+    } else {
+        if let Option.Some(rb) = node.get(op, "requestBody") {
+            body_v3(cx, r, label, deref(cx, rb));
+        }
+    }
+    r
+}
+
+/// The path item's parameters, then the operation's (which replace those with the same name
+/// and place), references followed.
+fn parameters(cx: Ctx, item: Node, op: Node) -> [Node] {
+    var out: [Node] = [];
+    for raw in node.items_at(item, "parameters") + node.items_at(op, "parameters") {
+        let p = deref(cx, raw);
+        let id = node.str_at(p, "in") + ":" + node.str_at(p, "name");
+        var replaced = false;
+        var i = 0;
+        while (i < out.len()) {
+            if (node.str_at(out[i], "in") + ":" + node.str_at(out[i], "name") == id) {
+                out[i] = p;
+                replaced = true;
+            }
+            i = i + 1;
+        }
+        if (!replaced) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// A variable name for `name`: kept when valid, else its invalid characters as `_`.
+fn variable_name(name: string) -> string {
+    if (model.valid_variable_name(name)) {
+        return name;
+    }
+    var out: [string] = [];
+    for c in name.chars() {
+        let s = c.to_string();
+        out.push(if (model.valid_variable_name(s)) { s } else { "_" });
+    }
+    let n = out.join("");
+    if (n == "") { "param" } else { n }
+}
+
+/// `/pets/{petId}` → `/pets/{{petId}}`; a path parameter with an example (or default) gives
+/// its variable that value in the imported folder, the first time it is seen.
+fn path_with_variables(cx: Ctx, path: string, params: [Node]) -> string {
+    var out: [string] = [];
+    var rest = path;
+    while (true) {
+        let open = match (rest.index_of("{")) {
+            Option.Some(i) => i,
+            Option.None => break,
+        };
+        let close = match (rest.index_of("}")) {
+            Option.Some(j) => j,
+            Option.None => break,
+        };
+        if (close < open) {
+            break;
+        }
+        let pname = rest.substring(open + 1, close);
+        let var_name = variable_name(pname);
+        out.push(rest.substring(0, open));
+        out.push("{{" + var_name + "}}");
+        rest = rest.substring(close + 1, rest.len());
+        for p in params {
+            if (node.str_at(p, "in") == "path" && node.str_at(p, "name") == pname) {
+                if let Option.Some(v) = explicit_value(cx, p) {
+                    let text = value_text(v);
+                    let known = cx.variables.filter(fn(x: model.Pair) -> bool { x.key == var_name });
+                    if (text != "" && known.len() == 0) {
+                        cx.variables.push(model.Pair { key: var_name, value: text, enabled: true });
+                    }
+                }
+            }
+        }
+    }
+    out.push(rest);
+    out.join("")
+}
+
+/// A value the description gives for a parameter: its example(s), else its schema's example,
+/// default or first enum value (Swagger 2.0 keeps these on the parameter itself).
+fn explicit_value(cx: Ctx, p: Node) -> Option<Node> {
+    if let Option.Some(v) = node.get(p, "example") {
+        return Option.Some(v);
+    }
+    if let Option.Some(v) = first_example(cx, p) {
+        return Option.Some(v);
+    }
+    if let Option.Some(v) = node.get(p, "x-example") {
+        return Option.Some(v);
+    }
+    let schema = match (node.get(p, "schema")) {
+        Option.Some(s) => deref(cx, s),
+        Option.None => p,
+    };
+    schema_value(schema)
+}
+
+/// `examples: {name: {value}}` (OpenAPI 3): the first one's value.
+fn first_example(cx: Ctx, n: Node) -> Option<Node> {
+    for (_, ex) in node.entries_at(n, "examples") {
+        let e = deref(cx, ex);
+        if let Option.Some(v) = node.get(e, "value") {
+            return Option.Some(v);
+        }
+    }
+    Option.None
+}
+
+/// A schema's own value: example, `examples` (3.1, a list), default, const or first enum.
+fn schema_value(s: Node) -> Option<Node> {
+    if let Option.Some(v) = node.get(s, "example") {
+        return Option.Some(v);
+    }
+    let examples = node.items_at(s, "examples");
+    if (examples.len() > 0) {
+        return Option.Some(examples[0]);
+    }
+    if let Option.Some(v) = node.get(s, "default") {
+        return Option.Some(v);
+    }
+    if let Option.Some(v) = node.get(s, "const") {
+        return Option.Some(v);
+    }
+    let options = node.items_at(s, "enum");
+    if (options.len() > 0) {
+        return Option.Some(options[0]);
+    }
+    Option.None
+}
+
+/// A value as a parameter's text: a list joined with commas, an object as JSON.
+fn value_text(v: Node) -> string {
+    match (v) {
+        Node.Null => "",
+        Node.List(xs) => xs.map(value_text).join(","),
+        Node.Obj(_) => node.to_json(v, 0),
+        _ => node.text(v).unwrap_or(""),
+    }
+}
+
+// ---- bodies --------------------------------------------------------------------------------
+
+/// What rayreq makes of a media type.
+fn body_kind(media_type: string) -> string {
+    let mt = media_type.split(";")[0].trim().to_lower();
+    if (mt == "application/json" || mt.ends_with("+json") || mt == "*/*" || mt == "application/*") {
+        "json"
+    } else if (mt == "application/x-www-form-urlencoded") {
+        "form"
+    } else if (mt == "multipart/form-data" || mt.starts_with("multipart/")) {
+        "multipart"
+    } else if (mt.ends_with("/xml") || mt.ends_with("+xml")) {
+        "xml"
+    } else if (mt.starts_with("text/")) {
+        "text"
+    } else {
+        "other"
+    }
+}
+
+const KIND_ORDER: [string] = ["json", "form", "xml", "text", "multipart", "other"];
+
+fn body_v3(cx: Ctx, r: model.Request, label: string, rb: Node) {
+    let content = node.entries_at(rb, "content");
+    if (content.len() == 0) {
+        return;
+    }
+    // The first media type of the kind rayreq handles best.
+    var chosen = content[0];
+    var best = KIND_ORDER.len();
+    for (mt, media) in content {
+        let rank = KIND_ORDER.position(body_kind(mt)).unwrap_or(KIND_ORDER.len());
+        if (rank < best) {
+            best = rank;
+            chosen = (mt, media);
+        }
+    }
+    let (mt, media) = chosen;
+    // The schema as written: `sample` follows its $ref itself, to see a type refer to itself.
+    let raw_schema = node.get(media, "schema").unwrap_or(Node.Obj([]));
+    let schema = deref(cx, raw_schema);
+    let example = match (node.get(media, "example")) {
+        Option.Some(v) => Option.Some(v),
+        Option.None => first_example(cx, media),
+    };
+    match (body_kind(mt)) {
+        "json" => {
+            r.body_type = "json";
+            let value = match (example) {
+                Option.Some(v) => v,
+                Option.None => sample_body(cx, raw_schema),
+            };
+            r.body = node.to_json(value, 2);
+            let plain = mt.split(";")[0].trim().to_lower();
+            if (plain != "application/json" && plain != "*/*" && plain != "application/*") {
+                r.headers.push(model.Pair { key: "Content-Type", value: mt, enabled: true });
+            }
+        },
+        "form" => {
+            r.body_type = "form";
+            r.form = form_fields(cx, schema, example);
+        },
+        "xml" => {
+            r.body_type = "xml";
+            r.body = text_example(example);
+            r.headers.push(model.Pair { key: "Content-Type", value: mt, enabled: true });
+        },
+        "text" => {
+            r.body_type = "text";
+            r.body = text_example(example);
+            r.headers.push(model.Pair { key: "Content-Type", value: mt, enabled: true });
+        },
+        "multipart" => warn(cx, "${label}: multipart bodies are not supported yet; imported without its body"),
+        _ => warn(cx, "${label}: ${mt} bodies cannot be imported; imported without its body"),
+    }
+}
+
+fn text_example(example: Option<Node>) -> string {
+    match (example) {
+        Option.Some(Node.Str(s)) => s,
+        _ => "",
+    }
+}
+
+/// The fields of a form body: the example's, else the schema's properties (the required ones
+/// on).
+fn form_fields(cx: Ctx, schema: Node, example: Option<Node>) -> [model.Pair] {
+    if let Option.Some(Node.Obj(fields)) = example {
+        return fields.map(fn(f: (string, Node)) -> model.Pair { model.Pair { key: f.0, value: value_text(f.1), enabled: true } });
+    }
+    let required = node.items_at(schema, "required")
+        .map(fn(n: Node) -> string { node.text(n).unwrap_or("") });
+    var out: [model.Pair] = [];
+    for (k, raw) in properties_of(cx, schema) {
+        let prop = deref(cx, raw);
+        if (node.bool_at(prop, "readOnly")) {
+            continue;
+        }
+        let value = match (schema_value(prop)) {
+            Option.Some(v) => value_text(v),
+            Option.None => "",
+        };
+        out.push(model.Pair { key: k, value: value, enabled: required.contains(k) });
+    }
+    out
+}
+
+/// The properties of an object schema, those of its `allOf` parts included.
+fn properties_of(cx: Ctx, schema: Node) -> [(string, Node)] {
+    var out = node.entries_at(schema, "properties");
+    for part in node.items_at(schema, "allOf") {
+        out = out + properties_of(cx, deref(cx, part));
+    }
+    out
+}
+
+/// Swagger 2.0: a `body` parameter's schema, or the `formData` parameters as a form.
+fn body_v2(cx: Ctx, r: model.Request, label: string, op: Node, params: [Node]) {
+    let consumes = if (node.has(op, "consumes")) {
+        node.items_at(op, "consumes")
+    } else {
+        node.items_at(cx.root, "consumes")
+    }.map(fn(n: Node) -> string { node.text(n).unwrap_or("") });
+    for p in params {
+        if (node.str_at(p, "in") == "body") {
+            let schema = node.get(p, "schema").unwrap_or(Node.Obj([]));
+            let json_ok = consumes.len() == 0
+                || consumes.filter(fn(c: string) -> bool { body_kind(c) == "json" }).len() > 0;
+            if (json_ok) {
+                r.body_type = "json";
+                r.body = node.to_json(sample_body(cx, schema), 2);
+            } else if (consumes.filter(fn(c: string) -> bool { body_kind(c) == "xml" }).len() > 0) {
+                r.body_type = "xml";
+            } else {
+                warn(
+                    cx,
+                    "${label}: ${consumes[0]} bodies cannot be imported; imported without its body"
+                );
+            }
+            return;
+        }
+    }
+    var fields: [model.Pair] = [];
+    var files = false;
+    for p in params {
+        if (node.str_at(p, "in") != "formData") {
+            continue;
+        }
+        if (node.str_at(p, "type") == "file") {
+            files = true;
+            continue;
+        }
+        let value = match (explicit_value(cx, p)) {
+            Option.Some(v) => value_text(v),
+            Option.None => "",
+        };
+        fields.push(
+            model.Pair {
+                key: node.str_at(p, "name"),
+                value: value,
+                enabled: node.bool_at(p, "required")
+            }
+        );
+    }
+    if (files) {
+        warn(
+            cx,
+            "${label}: file uploads (multipart) are not supported yet; the file fields are left out"
+        );
+    }
+    if (fields.len() > 0) {
+        r.body_type = "form";
+        r.form = fields;
+    }
+}
+
+// ---- example bodies ------------------------------------------------------------------------
+
+fn sample_body(cx: Ctx, schema: Node) -> Node {
+    cx.budget = SAMPLE_BUDGET;
+    sample(cx, schema, 0, [])
+}
+
+/// A value that fits `schema`: its own example when it has one, else built from its type.
+fn sample(cx: Ctx, raw: Node, depth: int, seen: [string]) -> Node {
+    cx.budget = cx.budget - 1;
+    if (depth > SAMPLE_DEPTH || cx.budget < 0) {
+        return Node.Null;
+    }
+    // A schema that refers to itself (a tree of categories) stops at the second visit.
+    var path = seen;
+    if let Option.Some(r) = node.get(raw, "$ref") {
+        let ref = node.text(r).unwrap_or("");
+        if (seen.contains(ref)) {
+            return Node.Null;
+        }
+        path = seen + [ref];
+    }
+    let s = deref(cx, raw);
+    if let Option.Some(v) = schema_value(s) {
+        return v;
+    }
+    let all = node.items_at(s, "allOf");
+    if (all.len() > 0) {
+        var fields: [(string, Node)] = [];
+        var other = Node.Null;
+        for part in all {
+            match (sample(cx, part, depth + 1, path)) {
+                Node.Obj(fs) => {
+                    for (k, v) in fs {
+                        node.put(fields, k, v);
+                    }
+                },
+                x => other = x,
+            }
+        }
+        // allOf may also add properties of its own next to the parts.
+        for (k, v) in sample_properties(cx, s, depth, path) {
+            node.put(fields, k, v);
+        }
+        return if (fields.len() == 0) { other } else { Node.Obj(fields) };
+    }
+    for key in ["oneOf", "anyOf"] {
+        let options = node.items_at(s, key);
+        if (options.len() > 0) {
+            return sample(cx, options[0], depth + 1, path);
+        }
+    }
+    let kind = type_of(s);
+    match (kind) {
+        "object" => Node.Obj(sample_properties(cx, s, depth, path)),
+        "array" => match (node.get(s, "items")) {
+            Option.Some(items) => {
+                let item = sample(cx, items, depth + 1, path);
+                match (item) {
+                    Node.Null => Node.List([]),
+                    _ => Node.List([item]),
+                }
+            },
+            Option.None => Node.List([]),
+        },
+        "string" => Node.Str(string_sample(node.str_at(s, "format"))),
+        "integer" => Node.Num("0"),
+        "number" => Node.Num("0"),
+        "boolean" => Node.Bool(true),
+        _ => Node.Null,
+    }
+}
+
+fn sample_properties(cx: Ctx, s: Node, depth: int, seen: [string]) -> [(string, Node)] {
+    var out: [(string, Node)] = [];
+    for (k, raw) in node.entries_at(s, "properties") {
+        if (node.bool_at(deref(cx, raw), "readOnly")) {
+            continue;
+        }
+        out.push((k, sample(cx, raw, depth + 1, seen)));
+    }
+    out
+}
+
+/// The schema's type (3.1 allows a list: the first that is not "null"), or the one its
+/// keywords imply.
+fn type_of(s: Node) -> string {
+    match (node.get(s, "type")) {
+        Option.Some(Node.Str(t)) => return t,
+        Option.Some(Node.List(ts)) => {
+            for t in ts {
+                let name = node.text(t).unwrap_or("");
+                if (name != "null") {
+                    return name;
+                }
+            }
+            return "null";
+        },
+        _ => { },
+    }
+    if (node.has(s, "properties")) {
+        "object"
+    } else if (node.has(s, "items")) {
+        "array"
+    } else {
+        ""
+    }
+}
+
+fn string_sample(format: string) -> string {
+    match (format) {
+        "date" => "2024-01-01",
+        "date-time" => "2024-01-01T00:00:00Z",
+        "time" => "00:00:00",
+        "email" => "user@example.com",
+        "uuid" => "00000000-0000-0000-0000-000000000000",
+        "uri" => "https://example.com",
+        "url" => "https://example.com",
+        "hostname" => "example.com",
+        "ipv4" => "192.0.2.1",
+        "ipv6" => "2001:db8::1",
+        "byte" => "",
+        "binary" => "",
+        "password" => "",
+        _ => "string",
+    }
+}
+
+// ---- security ------------------------------------------------------------------------------
+
+/// The auth a `security` list asks for: its first requirement (a `{}` one means "none needed"
+/// and is skipped when another follows), with credentials as `{{variables}}`.
+fn auth_for(cx: Ctx, sec: Node) -> model.Auth {
+    let none = model.auth_of_kind("none");
+    var requirement: [(string, Node)] = [];
+    for r in node.items(sec) {
+        let schemes = node.entries(r);
+        if (schemes.len() > 0) {
+            requirement = schemes;
+            break;
+        }
+    }
+    if (requirement.len() == 0) {
+        return none;
+    }
+    let scheme_name = requirement[0].0;
+    if (requirement.len() > 1) {
+        warn(
+            cx,
+            "a security requirement combines ${requirement.len()} schemes; only '${scheme_name}' is set up"
+        );
+    }
+    var scheme = Node.Null;
+    for (n, sch) in cx.schemes {
+        if (n == scheme_name) {
+            scheme = deref(cx, sch);
+        }
+    }
+    if (!node.is_obj(scheme)) {
+        warn(cx, "the security scheme '${scheme_name}' is not described");
+        return none;
+    }
+    let kind = node.str_at(scheme, "type");
+    if (kind == "basic"
+        || (kind == "http" && node.str_at(scheme, "scheme").to_lower() == "basic")) {
+        var a = model.auth_of_kind("basic");
+        a.username = "{{username}}";
+        a.password = "{{password}}";
+        return a;
+    }
+    if (kind == "http" && node.str_at(scheme, "scheme").to_lower() == "bearer") {
+        var a = model.auth_of_kind("bearer");
+        a.token = "{{token}}";
+        return a;
+    }
+    if (kind == "http") {
+        warn(
+            cx,
+            "HTTP '${node.str_at(scheme, "scheme")}' authentication is not supported ('${scheme_name}')"
+        );
+        return none;
+    }
+    if (kind == "apiKey") {
+        let where = node.str_at(scheme, "in");
+        if (where == "header" || where == "query") {
+            var a = model.auth_of_kind("apikey");
+            a.key = node.str_at(scheme, "name");
+            a.value = "{{" + variable_name(scheme_name) + "}}";
+            a.add_to = where;
+            return a;
+        }
+        warn(
+            cx,
+            "API keys sent in a cookie are not set up ('${scheme_name}'): add a Cookie header"
+        );
+        return none;
+    }
+    if (kind == "oauth2" || kind == "openIdConnect") {
+        warn(
+            cx,
+            "OAuth 2 flows are not supported yet ('${scheme_name}'): the requests send {{accessToken}} as a Bearer token"
+        );
+        var a = model.auth_of_kind("bearer");
+        a.token = "{{accessToken}}";
+        return a;
+    }
+    warn(cx, "the security scheme '${scheme_name}' (${kind}) is not supported");
+    none
+}

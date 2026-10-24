@@ -1,0 +1,297 @@
+//! URLs as a REST client needs them: split into parts, percent-encode what the user typed
+//! without double-encoding what is already encoded, and resolve a redirect's `Location`.
+//! (`std/url` encodes and decodes components but has no URL parser.)
+
+import std/url;
+
+pub struct Url {
+    scheme: string,
+    /// Without brackets for IPv6 (`::1`); `authority` puts them back.
+    host: string,
+    /// 0 = the scheme's default.
+    port: int,
+    /// Starts with `/` (an empty path is `/`).
+    path: string,
+    /// Without the `?`; empty = none.
+    query: string,
+}
+
+pub fn default_port(scheme: string) -> int {
+    if (scheme == "https") { 443 } else { 80 }
+}
+
+pub fn effective_port(u: Url) -> int {
+    if (u.port == 0) { default_port(u.scheme) } else { u.port }
+}
+
+/// `host[:port]` as the Host header and the URL write it.
+pub fn authority(u: Url) -> string {
+    let h = if (u.host.contains(":")) { "[${u.host}]" } else { u.host };
+    if (u.port == 0 || u.port == default_port(u.scheme)) { h } else { "${h}:${u.port}" }
+}
+
+/// `scheme://host:port`: two URLs with the same origin may share credentials.
+pub fn origin(u: Url) -> string {
+    "${u.scheme}://${u.host}:${effective_port(u)}"
+}
+
+/// The request target of the request line: path and query.
+pub fn target(u: Url) -> string {
+    if (u.query == "") { u.path } else { "${u.path}?${u.query}" }
+}
+
+pub fn render(u: Url) -> string {
+    "${u.scheme}://${authority(u)}${target(u)}"
+}
+
+/// What the user typed, with `http://` in front when there is no scheme (`localhost:8080/x`,
+/// `api.example.com`), as curl and browsers do.
+pub fn with_scheme(raw: string) -> string {
+    let s = raw.trim();
+    let lower = s.to_lower();
+    if (lower.starts_with("http://") || lower.starts_with("https://")) {
+        return s;
+    }
+    match (s.index_of("://")) {
+        Option.Some(_) => s,
+        Option.None => "http://" + s,
+    }
+}
+
+fn is_hex(c: char) -> bool {
+    let n = char_code(c);
+    (n >= 48 && n <= 57) || (n >= 65 && n <= 70) || (n >= 97 && n <= 102)
+}
+
+/// Characters that may appear as they are in a path or query (RFC 3986 unreserved,
+/// sub-delims, `:`, `@`, `/`, `?`). `%` is handled apart; `#` never reaches here.
+fn is_url_char(c: char) -> bool {
+    let n = char_code(c);
+    if ((n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122)) {
+        return true;
+    }
+    "-._~!$&'()*+,;=:@/?".contains(c.to_string())
+}
+
+/// Percent-encodes what cannot travel as it is (spaces, quotes, `{}`, `|`, non-ASCII…) and
+/// leaves valid `%XX` escapes alone, so normalizing twice changes nothing. A `%` that does not
+/// start an escape becomes `%25`.
+pub fn encode_loose(s: string) -> string {
+    let cs = s.chars();
+    var out = "";
+    var i = 0;
+    while (i < cs.len()) {
+        let c = cs[i];
+        if (c == '%') {
+            if (i + 2 < cs.len() && is_hex(cs[i + 1]) && is_hex(cs[i + 2])) {
+                out = out + "%";
+            } else {
+                out = out + "%25";
+            }
+        } else if (is_url_char(c)) {
+            out = out + c.to_string();
+        } else {
+            out = out + url.url_encode(c.to_string());
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// A registered name or IPv4 address: letters, digits, '-', '.', '_' (and non-ASCII letters of
+/// an internationalized name). Anything else (`{{base}}`, spaces) cannot reach a server.
+fn valid_host(host: string) -> bool {
+    for c in host.chars() {
+        let n = char_code(c);
+        // 0-9, A-Z, a-z, '-', '.', '_', non-ASCII
+        let ok = (n >= 48 && n <= 57)
+            || (n >= 65 && n <= 90)
+            || (n >= 97 && n <= 122)
+            || n == 45
+            || n == 46
+            || n == 95
+            || n > 127;
+        if (!ok) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Splits an absolute `http`/`https` URL. The fragment is dropped (it never goes on the wire).
+pub fn parse(raw: string) -> Result<Url, string> {
+    let s = raw.trim();
+    let sep = match (s.index_of("://")) {
+        Option.Some(i) => i,
+        Option.None => return Result.Err("not an absolute URL: '${s}'"),
+    };
+    let scheme = s.substring(0, sep).to_lower();
+    if (scheme != "http" && scheme != "https") {
+        return Result.Err("unsupported scheme '${scheme}' (only http and https)");
+    }
+    var rest = s.substring(sep + 3, s.len());
+    match (rest.index_of("#")) {
+        Option.Some(i) => rest = rest.substring(0, i),
+        Option.None => { },
+    }
+    // The authority ends at the first '/' or '?'.
+    var end = rest.len();
+    match (rest.index_of("/")) {
+        Option.Some(i) => end = i,
+        Option.None => { },
+    }
+    match (rest.index_of("?")) {
+        Option.Some(i) => if (i < end) {
+            end = i;
+        },
+        Option.None => { },
+    }
+    var auth = rest.substring(0, end);
+    let after = rest.substring(end, rest.len());
+    // userinfo@ is not supported: say so instead of sending it as part of the host.
+    if (auth.contains("@")) {
+        return Result.Err("credentials in the URL are not supported; use an Authorization header");
+    }
+    var host = auth;
+    var port = 0;
+    if (auth.starts_with("[")) {
+        let close = match (auth.index_of("]")) {
+            Option.Some(i) => i,
+            Option.None => return Result.Err("unterminated IPv6 address in '${s}'"),
+        };
+        host = auth.substring(1, close);
+        let tail = auth.substring(close + 1, auth.len());
+        if (tail != "") {
+            if (!tail.starts_with(":")) {
+                return Result.Err("unexpected '${tail}' after the IPv6 address");
+            }
+            port = parse_port(tail.substring(1, tail.len()))?;
+        }
+    } else {
+        match (auth.last_index_of(":")) {
+            Option.Some(i) => {
+                host = auth.substring(0, i);
+                port = parse_port(auth.substring(i + 1, auth.len()))?;
+            },
+            Option.None => { },
+        }
+    }
+    if (host == "") {
+        return Result.Err("missing host in '${s}'");
+    }
+    if (!auth.starts_with("[") && !valid_host(host)) {
+        return Result.Err("invalid host '${host}'");
+    }
+    var path = after;
+    var query = "";
+    match (after.index_of("?")) {
+        Option.Some(i) => {
+            path = after.substring(0, i);
+            query = after.substring(i + 1, after.len());
+        },
+        Option.None => { },
+    }
+    if (path == "") {
+        path = "/";
+    }
+    Result.Ok(
+        Url {
+            scheme: scheme,
+            host: host.to_lower(),
+            port: port,
+            path: encode_loose(path),
+            query: encode_loose(query)
+        }
+    )
+}
+
+fn parse_port(s: string) -> Result<int, string> {
+    if (s == "") {
+        return Result.Ok(0);
+    }
+    match (parse_int(s)) {
+        Option.Some(p) => if (p > 0 && p <= 65535) {
+            Result.Ok(p)
+        } else {
+            Result.Err("port out of range: ${s}")
+        },
+        Option.None => Result.Err("invalid port: '${s}'"),
+    }
+}
+
+/// Removes `.` and `..` segments (RFC 3986 §5.2.4).
+pub fn remove_dots(path: string) -> string {
+    let segs = path.split("/");
+    var out: [string] = [];
+    var i = 0;
+    for seg in segs {
+        let last = i == segs.len() - 1;
+        if (seg == ".") {
+            if (last) {
+                out.push("");
+            }
+        } else if (seg == "..") {
+            if (out.len() > 1) {
+                out.pop();
+            }
+            if (last) {
+                out.push("");
+            }
+        } else {
+            out.push(seg);
+        }
+        i = i + 1;
+    }
+    let joined = join(out, "/");
+    if (joined.starts_with("/")) { joined } else { "/" + joined }
+}
+
+/// The absolute URL a `Location` header points to, relative to the URL that answered.
+pub fn resolve(base: Url, location: string) -> Result<Url, string> {
+    let loc = location.trim();
+    if (loc.index_of("://").is_some()) {
+        return parse(loc);
+    }
+    if (loc.starts_with("//")) {
+        return parse(base.scheme + ":" + loc);
+    }
+    let head = "${base.scheme}://${authority(base)}";
+    if (loc.starts_with("/")) {
+        return parse(head + loc);
+    }
+    if (loc.starts_with("?")) {
+        return parse(head + base.path + loc);
+    }
+    if (loc == "") {
+        return Result.Ok(base);
+    }
+    // Relative to the base path's directory.
+    let dir = match (base.path.last_index_of("/")) {
+        Option.Some(i) => base.path.substring(0, i + 1),
+        Option.None => "/",
+    };
+    let joined = dir + loc;
+    var path = joined;
+    var query = "";
+    match (joined.index_of("?")) {
+        Option.Some(i) => {
+            path = joined.substring(0, i);
+            query = joined.substring(i, joined.len());
+        },
+        Option.None => { },
+    }
+    parse(head + remove_dots(path) + query)
+}
+
+/// `application/x-www-form-urlencoded`: spaces as `+`, the rest per RFC 3986.
+pub fn form_encode(pairs: [(string, string)]) -> string {
+    var parts: [string] = [];
+    for (k, v) in pairs {
+        parts.push(form_component(k) + "=" + form_component(v));
+    }
+    join(parts, "&")
+}
+
+fn form_component(s: string) -> string {
+    url.url_encode(s).replace("%20", "+")
+}

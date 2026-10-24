@@ -1,0 +1,395 @@
+//! What rayreq stores and the page edits: projects, environments, folders, requests and their
+//! history.
+//!
+//! A stored request is a TEMPLATE: executing it never writes anything back into it (the
+//! response goes to the history). `{{variables}}` are resolved on a copy at send time
+//! (vars.ray), so a resolved value can never leak into what is saved (see docs/VARIABLES.md).
+
+import std/json;
+import jsonv;
+
+pub const METHODS: [string] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+pub const BODY_TYPES: [string] = ["none", "json", "text", "xml", "form"];
+
+pub const DEFAULT_TIMEOUT_MS: int = 30000;
+
+pub const MAX_TIMEOUT_MS: int = 3 * 3600 * 1000;
+
+pub const DEFAULT_MAX_REDIRECTS: int = 10;
+
+pub const MAX_REDIRECTS_LIMIT: int = 50;
+
+/// "inherit" takes the auth of the nearest folder above that has one of its own; "none" sends
+/// nothing (and stops the inheritance for what is below).
+pub const AUTH_KINDS: [string] = ["inherit", "none", "basic", "bearer", "apikey"];
+
+/// How a request (or a folder, for everything below it) authenticates. Only the fields of its
+/// `kind` count; the others are kept so switching kinds back and forth loses nothing. Every
+/// field may hold `{{variables}}`.
+pub struct Auth {
+    kind: string,
+    username: string,
+    password: string,
+    token: string,
+    /// apikey: the header or query parameter name, its value, and where it goes.
+    key: string,
+    value: string,
+    /// "header" | "query"
+    add_to: string,
+}
+
+pub fn auth_of_kind(kind: string) -> Auth {
+    Auth { kind: kind, username: "", password: "", token: "", key: "", value: "", add_to: "header" }
+}
+
+/// One row of a key/value table (query params, headers, form fields). Disabled rows are kept
+/// so the user can toggle them back on; they are never sent.
+pub struct Pair {
+    key: string,
+    value: string,
+    enabled: bool,
+}
+
+pub struct Project {
+    id: int,
+    name: string,
+    description: string,
+    created_at: int,
+    updated_at: int,
+}
+
+/// A named set of variables of a project. Exactly one environment of each project is active;
+/// a project always has at least one (docs/VARIABLES.md, R8).
+pub struct Environment {
+    id: int,
+    project_id: int,
+    name: string,
+    active: bool,
+    position: int,
+}
+
+/// `parent_id` 0 = at the project's root.
+pub struct Folder {
+    id: int,
+    project_id: int,
+    parent_id: int,
+    name: string,
+    position: int,
+    auth: Auth,
+}
+
+/// `folder_id` 0 = at the project's root. `url` is what the user typed, query included: the
+/// page keeps `params` and the URL's query in sync, and `params` also holds the disabled rows.
+@derive(Clone)
+pub struct Request {
+    id: int,
+    project_id: int,
+    folder_id: int,
+    name: string,
+    method: string,
+    url: string,
+    params: [Pair],
+    headers: [Pair],
+    body_type: string,
+    body: string,
+    form: [Pair],
+    /// After a 2xx JSON response: `key` = the variable to set in the active environment,
+    /// `value` = the path in the body (`data.items[0].id`).
+    captures: [Pair],
+    auth: Auth,
+    /// Send the environment's cookies and keep the ones the response sets.
+    use_cookies: bool,
+    timeout_ms: int,
+    follow_redirects: bool,
+    max_redirects: int,
+    position: int,
+    created_at: int,
+    updated_at: int,
+}
+
+pub fn new_request(project_id: int, folder_id: int, name: string) -> Request {
+    Request {
+        id: 0,
+        project_id: project_id,
+        folder_id: folder_id,
+        name: name,
+        method: "GET",
+        url: "",
+        params: [],
+        headers: [],
+        body_type: "none",
+        body: "",
+        form: [],
+        captures: [],
+        auth: auth_of_kind("inherit"),
+        use_cookies: true,
+        timeout_ms: DEFAULT_TIMEOUT_MS,
+        follow_redirects: true,
+        max_redirects: DEFAULT_MAX_REDIRECTS,
+        position: 0,
+        created_at: 0,
+        updated_at: 0
+    }
+}
+
+// ---- to JSON -------------------------------------------------------------------------------
+
+pub fn pairs_json(ps: [Pair]) -> json.Json {
+    var out: [json.Json] = [];
+    for p in ps {
+        out.push(
+            jsonv.obj(
+                [
+                    ("key", jsonv.str(p.key)),
+                    ("value", jsonv.str(p.value)),
+                    ("enabled", jsonv.flag(p.enabled))
+                ]
+            )
+        );
+    }
+    jsonv.arr(out)
+}
+
+pub fn project_json(p: Project) -> json.Json {
+    jsonv.obj(
+        [
+            ("id", jsonv.num(p.id)),
+            ("name", jsonv.str(p.name)),
+            ("description", jsonv.str(p.description)),
+            ("created_at", jsonv.num(p.created_at)),
+            ("updated_at", jsonv.num(p.updated_at))
+        ]
+    )
+}
+
+pub fn environment_json(e: Environment) -> json.Json {
+    jsonv.obj(
+        [
+            ("id", jsonv.num(e.id)),
+            ("project_id", jsonv.num(e.project_id)),
+            ("name", jsonv.str(e.name)),
+            ("active", jsonv.flag(e.active)),
+            ("position", jsonv.num(e.position))
+        ]
+    )
+}
+
+pub fn auth_json(a: Auth) -> json.Json {
+    jsonv.obj(
+        [
+            ("kind", jsonv.str(a.kind)),
+            ("username", jsonv.str(a.username)),
+            ("password", jsonv.str(a.password)),
+            ("token", jsonv.str(a.token)),
+            ("key", jsonv.str(a.key)),
+            ("value", jsonv.str(a.value)),
+            ("add_to", jsonv.str(a.add_to))
+        ]
+    )
+}
+
+/// The auth the page sent, validated: an unknown kind or place is an error.
+pub fn auth_of(j: json.Json) -> Result<Auth, string> {
+    let kind = json.get_string(j, "kind").unwrap_or("inherit");
+    if (!AUTH_KINDS.contains(kind)) {
+        return Result.Err("unsupported auth type: '${kind}'");
+    }
+    let add_to = json.get_string(j, "add_to").unwrap_or("header");
+    if (add_to != "header" && add_to != "query") {
+        return Result.Err("an API key goes in the header or the query, not '${add_to}'");
+    }
+    Result.Ok(
+        Auth {
+            kind: kind,
+            username: jsonv.get_str(j, "username"),
+            password: jsonv.get_str(j, "password"),
+            token: jsonv.get_str(j, "token"),
+            key: jsonv.get_str(j, "key"),
+            value: jsonv.get_str(j, "value"),
+            add_to: add_to
+        }
+    )
+}
+
+/// Auth stored as JSON text in a column; unreadable text is "inherit".
+pub fn auth_text(a: Auth) -> string {
+    json.stringify(auth_json(a))
+}
+
+pub fn auth_from_text(s: string) -> Auth {
+    match (json.parse(s)) {
+        Result.Ok(j) => auth_of(j).unwrap_or(auth_of_kind("inherit")),
+        Result.Err(_) => auth_of_kind("inherit"),
+    }
+}
+
+pub fn folder_json(f: Folder) -> json.Json {
+    jsonv.obj(
+        [
+            ("id", jsonv.num(f.id)),
+            ("project_id", jsonv.num(f.project_id)),
+            ("parent_id", jsonv.num(f.parent_id)),
+            ("name", jsonv.str(f.name)),
+            ("position", jsonv.num(f.position))
+        ]
+    )
+}
+
+/// What the sidebar needs: no body, no tables.
+pub fn request_summary_json(r: Request) -> json.Json {
+    jsonv.obj(
+        [
+            ("id", jsonv.num(r.id)),
+            ("folder_id", jsonv.num(r.folder_id)),
+            ("name", jsonv.str(r.name)),
+            ("method", jsonv.str(r.method)),
+            ("position", jsonv.num(r.position))
+        ]
+    )
+}
+
+pub fn request_json(r: Request) -> json.Json {
+    jsonv.obj(
+        [
+            ("id", jsonv.num(r.id)),
+            ("project_id", jsonv.num(r.project_id)),
+            ("folder_id", jsonv.num(r.folder_id)),
+            ("name", jsonv.str(r.name)),
+            ("method", jsonv.str(r.method)),
+            ("url", jsonv.str(r.url)),
+            ("params", pairs_json(r.params)),
+            ("headers", pairs_json(r.headers)),
+            ("body_type", jsonv.str(r.body_type)),
+            ("body", jsonv.str(r.body)),
+            ("form", pairs_json(r.form)),
+            ("captures", pairs_json(r.captures)),
+            ("auth", auth_json(r.auth)),
+            ("use_cookies", jsonv.flag(r.use_cookies)),
+            ("timeout_ms", jsonv.num(r.timeout_ms)),
+            ("follow_redirects", jsonv.flag(r.follow_redirects)),
+            ("max_redirects", jsonv.num(r.max_redirects)),
+            ("position", jsonv.num(r.position)),
+            ("created_at", jsonv.num(r.created_at)),
+            ("updated_at", jsonv.num(r.updated_at))
+        ]
+    )
+}
+
+// ---- from JSON -----------------------------------------------------------------------------
+
+pub fn pairs_of(j: json.Json, key: string) -> [Pair] {
+    var out: [Pair] = [];
+    for item in json.get_array(j, key).unwrap_or([]) {
+        let k = jsonv.get_str(item, "key");
+        let v = jsonv.get_str(item, "value");
+        // A row with neither key nor value is the editor's trailing blank row.
+        if (k == "" && v == "") {
+            continue;
+        }
+        out.push(Pair { key: k, value: v, enabled: jsonv.get_bool(item, "enabled", true) });
+    }
+    out
+}
+
+fn clamp(v: int, lo: int, hi: int) -> int {
+    if (v < lo) { lo } else if (v > hi) { hi } else { v }
+}
+
+/// The request the page sent, validated: an unknown method or body type is an error, the
+/// numbers are clamped to their ranges. `id`, `project_id`, `folder_id` and the timestamps
+/// are read as given; the store decides what it trusts.
+pub fn request_of(j: json.Json) -> Result<Request, string> {
+    let method = jsonv.get_str(j, "method").trim().to_upper();
+    if (!METHODS.contains(method)) {
+        return Result.Err("unsupported method: '${method}'");
+    }
+    let body_type = json.get_string(j, "body_type").unwrap_or("none");
+    if (!BODY_TYPES.contains(body_type)) {
+        return Result.Err("unsupported body type: '${body_type}'");
+    }
+    let timeout = json.get_int(j, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
+    let redirects = json.get_int(j, "max_redirects").unwrap_or(DEFAULT_MAX_REDIRECTS);
+    Result.Ok(Request {
+        id: jsonv.get_int(j, "id"),
+        project_id: jsonv.get_int(j, "project_id"),
+        folder_id: jsonv.get_int(j, "folder_id"),
+        name: jsonv.get_str(j, "name"),
+        method: method,
+        url: jsonv.get_str(j, "url").trim(),
+        params: pairs_of(j, "params"),
+        headers: pairs_of(j, "headers"),
+        body_type: body_type,
+        body: jsonv.get_str(j, "body"),
+        form: pairs_of(j, "form"),
+        captures: pairs_of(j, "captures"),
+        auth: match (json.member(j, "auth")) {
+            Option.Some(a) => auth_of(a)?,
+            Option.None => auth_of_kind("inherit"),
+        },
+        use_cookies: jsonv.get_bool(j, "use_cookies", true),
+        timeout_ms: clamp(timeout, 0, MAX_TIMEOUT_MS),
+        follow_redirects: jsonv.get_bool(j, "follow_redirects", true),
+        max_redirects: clamp(redirects, 0, MAX_REDIRECTS_LIMIT),
+        position: jsonv.get_int(j, "position"),
+        created_at: jsonv.get_int(j, "created_at"),
+        updated_at: jsonv.get_int(j, "updated_at")
+    })
+}
+
+/// Pairs stored as JSON text in a column.
+pub fn pairs_text(ps: [Pair]) -> string {
+    json.stringify(pairs_json(ps))
+}
+
+pub fn pairs_from_text(s: string) -> [Pair] {
+    match (json.parse("{\"p\":" + s + "}")) {
+        Result.Ok(j) => pairs_of(j, "p"),
+        Result.Err(_) => [],
+    }
+}
+
+/// A variable name as `{{name}}` writes it: letters, digits, `_`, `.` and `-` (ASCII).
+pub fn valid_variable_name(name: string) -> bool {
+    if (name == "") {
+        return false;
+    }
+    for c in name.chars() {
+        let n = char_code(c);
+        // 0-9, A-Z, a-z, '_', '.', '-'
+        let ok = (n >= 48 && n <= 57)
+            || (n >= 65 && n <= 90)
+            || (n >= 97 && n <= 122)
+            || n == 95
+            || n == 46
+            || n == 45;
+        if (!ok) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The variables of an editor table as the store keeps them: names trimmed, blank rows dropped,
+/// every name valid and none repeated (a repeated name would make "which one wins" a guess).
+pub fn clean_variables(ps: [Pair]) -> Result<[Pair], string> {
+    var out: [Pair] = [];
+    var seen: [string] = [];
+    for p in ps {
+        let k = p.key.trim();
+        if (k == "" && p.value == "") {
+            continue;
+        }
+        if (!valid_variable_name(k)) {
+            return Result.Err(
+                "invalid variable name '${k}': use letters, digits, '_', '.' and '-'"
+            );
+        }
+        if (seen.contains(k)) {
+            return Result.Err("the variable '${k}' is defined twice");
+        }
+        seen.push(k);
+        out.push(Pair { key: k, value: p.value, enabled: p.enabled });
+    }
+    Result.Ok(out)
+}

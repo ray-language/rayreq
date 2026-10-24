@@ -1,0 +1,406 @@
+//! The cookie jar's rules (RFC 6265, with the 6265bis tightenings browsers apply): reading a
+//! `Set-Cookie` line in the context of the URL that sent it, and choosing the cookies a URL gets.
+//! Pure functions over a list: the store keeps one jar per environment, and a send works on a
+//! copy hop by hop (exec.run), then the main loop applies the same lines to the stored jar.
+
+import std/time;
+import urls;
+
+/// One stored cookie. `domain` is lower case without a leading dot; `host_only` = it goes only
+/// to that exact host (no Domain attribute). `expires` 0 = a session cookie (gone when the app
+/// starts again).
+pub struct Cookie {
+    name: string,
+    value: string,
+    domain: string,
+    host_only: bool,
+    path: string,
+    expires: int,
+    secure: bool,
+    http_only: bool,
+    same_site: string,
+    created: int,
+}
+
+/// What a Set-Cookie line does to the jar.
+pub enum Change {
+    Put(Cookie),
+    /// name, domain, path: an expired cookie removes the stored one.
+    Remove(string, string, string),
+}
+
+/// RFC 6265bis: no cookie lives longer than 400 days.
+const MAX_AGE_MS: int = 400 * 24 * 3600 * 1000;
+
+/// name + value, as browsers limit them.
+const MAX_SIZE: int = 4096;
+
+// ---- dates (RFC 6265 §5.1.1) ---------------------------------------------------------------
+
+fn is_delimiter(n: int) -> bool {
+    n == 9
+        || (n >= 32 && n <= 47)
+        || (n >= 59 && n <= 64)
+        || (n >= 91 && n <= 96)
+        || (n >= 123 && n <= 126)
+}
+
+fn is_digit(c: char) -> bool {
+    let n = char_code(c);
+    n >= 48 && n <= 57
+}
+
+/// The number made by the 1..max leading digits of `s`, when what follows them is not a digit.
+fn leading_number(s: string, min: int, max: int) -> Option<int> {
+    let cs = s.chars();
+    var n = 0;
+    while (n < cs.len() && is_digit(cs[n])) {
+        n = n + 1;
+    }
+    if (n < min || n > max) {
+        return Option.None;
+    }
+    parse_int(s.substring(0, n))
+}
+
+fn time_of(token: string) -> Option<(int, int, int)> {
+    let parts = token.split(":");
+    if (parts.len() != 3) {
+        return Option.None;
+    }
+    let h = leading_number(parts[0], 1, 2)?;
+    let m = leading_number(parts[1], 1, 2)?;
+    let s = leading_number(parts[2], 1, 2)?;
+    Option.Some((h, m, s))
+}
+
+const MONTHS: [string] = [
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec"
+];
+
+/// An `Expires` date as ms since the epoch, or None when it is not a date (the attribute is
+/// then ignored). Accepts the formats servers actually send (RFC 1123, RFC 850, asctime).
+pub fn parse_date(s: string) -> Option<int> {
+    var tokens: [string] = [];
+    var cur = "";
+    for c in s.chars() {
+        if (is_delimiter(char_code(c))) {
+            if (cur != "") {
+                tokens.push(cur);
+                cur = "";
+            }
+        } else {
+            cur = cur + c.to_string();
+        }
+    }
+    if (cur != "") {
+        tokens.push(cur);
+    }
+    var hms: Option<(int, int, int)> = Option.None;
+    var day: Option<int> = Option.None;
+    var month: Option<int> = Option.None;
+    var year: Option<int> = Option.None;
+    for tok in tokens {
+        if (hms.is_none()) {
+            if let Option.Some(t) = time_of(tok) {
+                hms = Option.Some(t);
+                continue;
+            }
+        }
+        if (day.is_none()) {
+            if let Option.Some(d) = leading_number(tok, 1, 2) {
+                day = Option.Some(d);
+                continue;
+            }
+        }
+        if (month.is_none() && tok.len() >= 3) {
+            if let Option.Some(i) = MONTHS.position(tok.substring(0, 3).to_lower()) {
+                month = Option.Some(i + 1);
+                continue;
+            }
+        }
+        if (year.is_none()) {
+            if let Option.Some(y) = leading_number(tok, 2, 4) {
+                year = Option.Some(y);
+                continue;
+            }
+        }
+    }
+    let (h, mi, se) = hms?;
+    let d = day?;
+    let mo = month?;
+    var y = year?;
+    if (y >= 70 && y <= 99) {
+        y = y + 1900;
+    } else if (y >= 0 && y <= 69) {
+        y = y + 2000;
+    }
+    if (d < 1 || d > 31 || y < 1601 || h > 23 || mi > 59 || se > 59) {
+        return Option.None;
+    }
+    Option.Some(
+        time.to_epoch_millis(
+            time.DateTime {
+                year: y,
+                month: mo,
+                day: d,
+                hour: h,
+                minute: mi,
+                second: se,
+                weekday: 0
+            }
+        )
+    )
+}
+
+// ---- matching ------------------------------------------------------------------------------
+
+fn is_ip(host: string) -> bool {
+    if (host.contains(":")) {
+        return true;
+    }
+    for c in host.chars() {
+        if (!is_digit(c) && c.to_string() != ".") {
+            return false;
+        }
+    }
+    true
+}
+
+/// RFC 6265 §5.1.3: the host is the domain, or a name under it (never for an IP address).
+pub fn domain_match(host: string, domain: string) -> bool {
+    host == domain || (!is_ip(host) && host.ends_with("." + domain))
+}
+
+/// RFC 6265 §5.1.4.
+pub fn path_match(request_path: string, cookie_path: string) -> bool {
+    if (request_path == cookie_path) {
+        return true;
+    }
+    if (!request_path.starts_with(cookie_path)) {
+        return false;
+    }
+    cookie_path.ends_with("/")
+        || request_path.substring(cookie_path.len(), cookie_path.len() + 1) == "/"
+}
+
+/// The directory of the request's path: where a cookie without Path applies.
+pub fn default_path(path: string) -> string {
+    if (!path.starts_with("/")) {
+        return "/";
+    }
+    match (path.last_index_of("/")) {
+        Option.Some(i) => if (i == 0) { "/" } else { path.substring(0, i) },
+        Option.None => "/",
+    }
+}
+
+/// https, or the local machine (where browsers also allow Secure cookies over http).
+pub fn secure_origin(u: urls.Url) -> bool {
+    u.scheme == "https" || u.host == "localhost" || u.host == "127.0.0.1" || u.host == "::1"
+}
+
+// ---- Set-Cookie ----------------------------------------------------------------------------
+
+/// What `line` (a Set-Cookie value) received from `u` at `now` does to the jar; Err says why it
+/// is ignored (browsers ignore such cookies silently; rayreq tells).
+pub fn parse_set_cookie(line: string, u: urls.Url, now: int) -> Result<Change, string> {
+    let parts = line.split(";");
+    let pair = parts[0];
+    let eq = match (pair.index_of("=")) {
+        Option.Some(i) => i,
+        Option.None => return Result.Err("no '=' in '${pair.trim()}'"),
+    };
+    let name = pair.substring(0, eq).trim();
+    let value = pair.substring(eq + 1, pair.len()).trim();
+    if (name == "") {
+        return Result.Err("a cookie needs a name");
+    }
+    if (name.len() + value.len() > MAX_SIZE) {
+        return Result.Err("cookie '${name}' is larger than ${MAX_SIZE} bytes");
+    }
+    var expires_attr: Option<int> = Option.None;
+    var max_age: Option<int> = Option.None;
+    var domain = "";
+    var path = "";
+    var secure = false;
+    var http_only = false;
+    var same_site = "";
+    var i = 1;
+    while (i < parts.len()) {
+        let attr = parts[i];
+        i = i + 1;
+        let (key, val) = match (attr.index_of("=")) {
+            Option.Some(k) => (attr.substring(0, k).trim().to_lower(), attr.substring(k + 1, attr.len()).trim()),
+            Option.None => (attr.trim().to_lower(), ""),
+        };
+        if (key == "expires") {
+            if let Option.Some(ms) = parse_date(val) {
+                expires_attr = Option.Some(ms);
+            }
+        } else if (key == "max-age") {
+            if let Option.Some(n) = parse_int(val) {
+                max_age = Option.Some(n);
+            }
+        } else if (key == "domain") {
+            let d = if (val.starts_with(".")) { val.substring(1, val.len()) } else { val };
+            if (d != "") {
+                domain = d.to_lower();
+            }
+        } else if (key == "path") {
+            if (val.starts_with("/")) {
+                path = val;
+            }
+        } else if (key == "secure") {
+            secure = true;
+        } else if (key == "httponly") {
+            http_only = true;
+        } else if (key == "samesite") {
+            same_site = val;
+        }
+    }
+    let host = u.host.to_lower();
+    var host_only = true;
+    if (domain != "") {
+        if (!domain_match(host, domain)) {
+            return Result.Err("cookie '${name}' is for '${domain}', not for '${host}'");
+        }
+        // A one-label domain (`com`, `local`) would reach every site under it.
+        if (!domain.contains(".") && domain != host) {
+            return Result.Err("cookie '${name}' sets the domain '${domain}' for everyone under it");
+        }
+        host_only = false;
+    } else {
+        domain = host;
+    }
+    if (path == "") {
+        path = default_path(u.path);
+    }
+    if (secure && !secure_origin(u)) {
+        return Result.Err("cookie '${name}' is Secure but came over http");
+    }
+    if (name.starts_with("__Secure-") && !secure) {
+        return Result.Err("cookie '${name}' needs the Secure attribute");
+    }
+    if (name.starts_with("__Host-") && (!secure || !host_only || path != "/")) {
+        return Result.Err("cookie '${name}' needs Secure, Path=/ and no Domain");
+    }
+    // Max-Age wins over Expires; both are capped at 400 days. Neither = a session cookie (0).
+    var expires = 0;
+    if let Option.Some(n) = max_age {
+        if (n <= 0) {
+            return Result.Ok(Change.Remove(name, domain, path));
+        }
+        expires = if (n > MAX_AGE_MS / 1000) { now + MAX_AGE_MS } else { now + n * 1000 };
+    } else if let Option.Some(at) = expires_attr {
+        if (at <= now) {
+            return Result.Ok(Change.Remove(name, domain, path));
+        }
+        expires = if (at > now + MAX_AGE_MS) { now + MAX_AGE_MS } else { at };
+    }
+    Result.Ok(
+        Change.Put(
+            Cookie {
+                name: name,
+                value: value,
+                domain: domain,
+                host_only: host_only,
+                path: path,
+                expires: expires,
+                secure: secure,
+                http_only: http_only,
+                same_site: same_site,
+                created: now
+            }
+        )
+    )
+}
+
+fn same_cookie(c: Cookie, name: string, domain: string, path: string) -> bool {
+    c.name == name && c.domain == domain && c.path == path
+}
+
+/// The jar after `change`: a cookie replaces the one with its name, domain and path (keeping
+/// that one's creation time, which orders the Cookie header).
+pub fn apply(jar: [Cookie], change: Change) -> [Cookie] {
+    var out: [Cookie] = [];
+    match (change) {
+        Change.Put(c) => {
+            var created = c.created;
+            for old in jar {
+                if (same_cookie(old, c.name, c.domain, c.path)) {
+                    created = old.created;
+                } else {
+                    out.push(old);
+                }
+            }
+            var put = c;
+            put.created = created;
+            out.push(put);
+        },
+        Change.Remove(name, domain, path) => {
+            for old in jar {
+                if (!same_cookie(old, name, domain, path)) {
+                    out.push(old);
+                }
+            }
+        },
+    }
+    out
+}
+
+/// Applies every `Set-Cookie` line received from `u`; the ones ignored come back with why.
+pub fn receive(jar: [Cookie], lines: [string], u: urls.Url, now: int) -> ([Cookie], [string]) {
+    var out = jar;
+    var ignored: [string] = [];
+    for line in lines {
+        match (parse_set_cookie(line, u, now)) {
+            Result.Ok(change) => out = apply(out, change),
+            Result.Err(e) => ignored.push(e),
+        }
+    }
+    (out, ignored)
+}
+
+/// The cookies `u` gets, in the order of the Cookie header (longer paths first, then the
+/// older ones), leaving out `except` (names the user wrote in a Cookie header by hand).
+pub fn for_url(jar: [Cookie], u: urls.Url, now: int, except: [string]) -> [Cookie] {
+    let host = u.host.to_lower();
+    var out: [Cookie] = [];
+    for c in jar {
+        if (c.expires != 0 && c.expires <= now) {
+            continue;
+        }
+        let host_ok = if (c.host_only) { host == c.domain } else { domain_match(host, c.domain) };
+        if (!host_ok
+            || !path_match(u.path, c.path)
+            || (c.secure && !secure_origin(u))
+            || except.contains(c.name)) {
+            continue;
+        }
+        out.push(c);
+    }
+    sort_by(out, fn(a: Cookie, b: Cookie) -> bool {
+        a.path.len() > b.path.len() || (a.path.len() == b.path.len() && a.created < b.created)
+    })
+}
+
+/// `a=1; b=2`, or "" when no cookie applies.
+pub fn header(cs: [Cookie]) -> string {
+    var parts: [string] = [];
+    for c in cs {
+        parts.push("${c.name}=${c.value}");
+    }
+    parts.join("; ")
+}

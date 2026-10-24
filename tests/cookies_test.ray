@@ -1,0 +1,274 @@
+// The cookie jar: RFC 6265 rules as pure functions, then a login over a real local server
+// (port 0) through redirects, the store and the page protocol.
+
+import std/fs;
+import std/json;
+import std/net;
+import std/time;
+import net/webserver;
+import api;
+import cookies;
+import exec;
+import model;
+import store;
+import urls;
+
+const NOW: int = 1800000000000;
+
+fn u(s: string) -> urls.Url {
+    urls.parse(s).unwrap()
+}
+
+fn put(line: string, from: string) -> cookies.Cookie {
+    match (cookies.parse_set_cookie(line, u(from), NOW)) {
+        Result.Ok(cookies.Change.Put(c)) => c,
+        Result.Ok(cookies.Change.Remove(n, _, _)) => panic("expected a cookie, got the removal of ${n}"),
+        Result.Err(e) => panic(e),
+    }
+}
+
+fn names(cs: [cookies.Cookie]) -> string {
+    var out: [string] = [];
+    for c in cs {
+        out.push(c.name);
+    }
+    out.join(",")
+}
+
+fn jar_of(lines: [string], from: string) -> [cookies.Cookie] {
+    cookies.receive([], lines, u(from), NOW).0
+}
+
+// ---- rules ---------------------------------------------------------------------------------
+
+@test
+fn a_cookie_without_domain_is_for_its_host_only() {
+    let c = put("sid=abc; Path=/; HttpOnly", "http://api.example.com/login");
+    assert_eq(
+        (c.domain, c.host_only, c.path, c.http_only, c.expires),
+        ("api.example.com", true, "/", true, 0)
+    );
+    let jar = [c];
+    assert_eq(names(cookies.for_url(jar, u("http://api.example.com/x"), NOW, [])), "sid");
+    assert_eq(names(cookies.for_url(jar, u("http://sub.api.example.com/x"), NOW, [])), "");
+    assert_eq(names(cookies.for_url(jar, u("http://example.com/x"), NOW, [])), "");
+}
+
+@test
+fn a_domain_cookie_reaches_the_subdomains() {
+    let c = put("t=1; Domain=.Example.com", "https://www.example.com/a/b");
+    assert_eq((c.domain, c.host_only, c.path), ("example.com", false, "/a"));
+    let jar = [c];
+    assert_eq(names(cookies.for_url(jar, u("https://api.example.com/a/x"), NOW, [])), "t");
+    assert_eq(names(cookies.for_url(jar, u("https://example.com/a"), NOW, [])), "t");
+    assert_eq(names(cookies.for_url(jar, u("https://badexample.com/a"), NOW, [])), "");
+    // Path /a is not /ab.
+    assert_eq(names(cookies.for_url(jar, u("https://example.com/ab"), NOW, [])), "");
+}
+
+@test
+fn foreign_and_too_broad_domains_are_refused() {
+    let from = u("http://www.example.com/");
+    assert(cookies.parse_set_cookie("a=1; Domain=evil.com", from, NOW).is_err());
+    assert(cookies.parse_set_cookie("a=1; Domain=com", from, NOW).is_err());
+    assert(cookies.parse_set_cookie("a=1; Domain=127.0.0.1", u("http://127.0.0.2/"), NOW).is_err());
+    assert(cookies.parse_set_cookie("novalue", from, NOW).is_err());
+    assert(cookies.parse_set_cookie("=x", from, NOW).is_err());
+}
+
+@test
+fn secure_cookies_and_prefixes() {
+    assert(cookies.parse_set_cookie("s=1; Secure", u("http://example.com/"), NOW).is_err());
+    let c = put("s=1; Secure", "https://example.com/");
+    assert_eq(names(cookies.for_url([c], u("http://example.com/"), NOW, [])), "");
+    assert_eq(names(cookies.for_url([c], u("https://example.com/"), NOW, [])), "s");
+    // localhost counts as a secure origin, as in browsers.
+    assert(cookies.parse_set_cookie("s=1; Secure", u("http://localhost:8080/"), NOW).is_ok());
+    assert(cookies.parse_set_cookie("__Secure-a=1", u("https://example.com/"), NOW).is_err());
+    assert(cookies.parse_set_cookie("__Host-a=1; Secure; Path=/; Domain=example.com", u("https://example.com/"), NOW)
+        .is_err());
+    assert(cookies.parse_set_cookie("__Host-a=1; Secure; Path=/", u("https://example.com/"), NOW)
+        .is_ok());
+}
+
+@test
+fn max_age_wins_over_expires_and_both_are_capped() {
+    let c = put("a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT; Max-Age=60", "http://h.example/");
+    assert_eq(c.expires, NOW + 60000);
+    let far = put("a=1; Max-Age=999999999", "http://h.example/");
+    assert_eq(far.expires, NOW + 400 * 24 * 3600 * 1000);
+    match (cookies.parse_set_cookie("a=; Max-Age=0", u("http://h.example/"), NOW)) {
+        Result.Ok(cookies.Change.Remove(n, d, p)) => assert_eq((n, d, p), ("a", "h.example", "/")),
+        _ => panic("expected a removal"),
+    }
+    match (cookies.parse_set_cookie(
+        "a=; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+        u("http://h.example/"),
+        NOW
+    )) {
+        Result.Ok(cookies.Change.Remove(_, _, _)) => { },
+        _ => panic("expected a removal"),
+    }
+}
+
+@test
+fn the_dates_servers_send_are_read() {
+    let want = 1445412480000;  // 2015-10-21T07:28:00Z
+    assert_eq(cookies.parse_date("Wed, 21 Oct 2015 07:28:00 GMT"), Option.Some(want));
+    assert_eq(cookies.parse_date("Wednesday, 21-Oct-15 07:28:00 GMT"), Option.Some(want));
+    assert_eq(cookies.parse_date("Wed Oct 21 07:28:00 2015"), Option.Some(want));
+    assert_eq(cookies.parse_date("21 October 2015 7:28:0"), Option.Some(want));
+    assert_eq(cookies.parse_date("tomorrow"), Option.None);
+    assert_eq(cookies.parse_date("Wed, 32 Oct 2015 07:28:00 GMT"), Option.None);
+}
+
+@test
+fn the_header_puts_longer_paths_first_and_replaces_by_name_domain_and_path() {
+    var jar = jar_of(["a=1; Path=/", "b=2; Path=/api"], "http://h.example/");
+    assert_eq(
+        cookies.header(cookies.for_url(jar, u("http://h.example/api/users"), NOW, [])),
+        "b=2; a=1"
+    );
+    jar = cookies.receive(jar, ["a=new; Path=/"], u("http://h.example/"), NOW + 5).0;
+    assert_eq(jar.len(), 2);
+    assert_eq(cookies.header(cookies.for_url(jar, u("http://h.example/"), NOW, [])), "a=new");
+    // Another path is another cookie.
+    jar = cookies.receive(jar, ["a=deep; Path=/api"], u("http://h.example/"), NOW).0;
+    assert_eq(
+        cookies.header(cookies.for_url(jar, u("http://h.example/api"), NOW, [])),
+        "b=2; a=deep; a=new"
+    );
+    // A name written by hand is not sent from the jar.
+    assert_eq(cookies.header(cookies.for_url(jar, u("http://h.example/api"), NOW, ["a"])), "b=2");
+}
+
+@test
+fn the_default_path_is_the_directory() {
+    assert_eq(cookies.default_path("/api/v1/login"), "/api/v1");
+    assert_eq(cookies.default_path("/login"), "/");
+    assert_eq(cookies.default_path("/"), "/");
+    assert(cookies.path_match("/api/v1/x", "/api/v1"));
+    assert(cookies.path_match("/api/", "/api/"));
+    assert(!cookies.path_match("/apix", "/api"));
+}
+
+@test
+fn expired_cookies_are_not_sent() {
+    let c = put("a=1; Max-Age=10", "http://h.example/");
+    assert_eq(names(cookies.for_url([c], u("http://h.example/"), NOW + 9000, [])), "a");
+    assert_eq(names(cookies.for_url([c], u("http://h.example/"), NOW + 10000, [])), "");
+}
+
+// ---- a login over a local server -----------------------------------------------------------
+
+fn site(req: webserver.Request) -> webserver.Response {
+    if (req.path == "/login") {
+        var r = webserver.text(302, "");
+        r.headers.insert("Location", "/me");
+        r.set_cookie.push("sid=s3cret; Path=/; HttpOnly");
+        r.set_cookie.push("theme=dark; Path=/; Max-Age=3600");
+        r.set_cookie.push("bad=1; Domain=elsewhere.org");
+        return r;
+    }
+    if (req.path == "/logout") {
+        var r = webserver.text(200, "bye");
+        r.set_cookie.push("sid=; Path=/; Max-Age=0");
+        return r;
+    }
+    webserver.text(200, "cookie=" + req.headers.get_or("cookie", ""))
+}
+
+fn start() -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    let _t = spawn(fn() {
+        let _ = webserver.serve_options_on(l, webserver.options()
+            .quiet(), fn() -> fn(webserver.Request) -> webserver.Response { site });
+    });
+    port
+}
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-cookies").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+/// Sends the stored request `id` the way the main loop does: handle → run → finish.
+fn send_stored(s: store.Store, id: int) -> json.Json {
+    let r = model.request_json(store.get_request(s, id).unwrap());
+    let job = match (api.handle(s, "{\"op\":\"send\",\"run\":1,\"request\":${json.stringify(r)}}")) {
+        api.Action.Send(j) => j,
+        api.Action.Reply(x) => panic(x),
+        _ => panic("unexpected action"),
+    };
+    let reply = json.parse(api.finish(s, job, exec.run(job.prepared))).unwrap();
+    json.member(reply, "value").unwrap()
+}
+
+fn text_of(v: json.Json) -> string {
+    json.get_string(v, "text").unwrap()
+}
+
+@test
+fn a_login_cookie_follows_the_redirect_and_the_next_sends() {
+    let port = start();
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = store.active_environment(s, p.id).unwrap().unwrap();
+    var login = model.new_request(p.id, 0, "login");
+    login.url = "http://127.0.0.1:${port}/login";
+    let login = store.create_request(s, login).unwrap();
+    var me = model.new_request(p.id, 0, "me");
+    me.url = "http://127.0.0.1:${port}/me";
+    let me = store.create_request(s, me).unwrap();
+
+    // The 302 sets the cookies; the hop to /me already carries them.
+    let first = send_stored(s, login.id);
+    assert_eq(text_of(first), "cookie=sid=s3cret; theme=dark");
+    assert_eq(json.get_int(first, "cookies_stored").unwrap(), 2);
+    let ignored = json.get_array(first, "cookies_ignored").unwrap();
+    assert_eq(ignored.len(), 1);
+    assert(json.as_string(ignored[0]).unwrap().contains("elsewhere.org"));
+    // The raw request shows the Cookie header that went out.
+    let sent = json.member(first, "sent").unwrap();
+    assert(json.stringify(sent).contains("sid=s3cret"));
+
+    // A later send of another request uses the stored jar.
+    assert_eq(text_of(send_stored(s, me.id)), "cookie=sid=s3cret; theme=dark");
+    assert_eq(store.list_cookies(s, env.id).unwrap().len(), 2);
+
+    // A request that opts out sends none and keeps none.
+    var off = store.get_request(s, me.id).unwrap();
+    off.use_cookies = false;
+    store.save_request(s, off).unwrap();
+    assert_eq(text_of(send_stored(s, me.id)), "cookie=");
+
+    // Logging out removes the session; another environment has its own jar.
+    var logout = model.new_request(p.id, 0, "logout");
+    logout.url = "http://127.0.0.1:${port}/logout";
+    send_stored(s, store.create_request(s, logout).unwrap().id);
+    assert_eq(names(store.list_cookies(s, env.id).unwrap()), "theme");
+    let other = store.create_environment(s, p.id, "other", 0).unwrap();
+    store.activate_environment(s, other.id).unwrap();
+    var on = store.get_request(s, me.id).unwrap();
+    on.use_cookies = true;
+    store.save_request(s, on).unwrap();
+    assert_eq(text_of(send_stored(s, me.id)), "cookie=");
+}
+
+@test
+fn session_cookies_end_when_the_app_starts_again() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = store.active_environment(s, p.id).unwrap().unwrap();
+    let now = time.now();
+    let jar = cookies.receive(
+        [],
+        ["session=1", "kept=1; Max-Age=600"],
+        u("http://h.example/"),
+        now
+    ).0;
+    store.save_cookies(s, env.id, jar).unwrap();
+    store.end_cookie_session(s).unwrap();
+    assert_eq(names(store.list_cookies(s, env.id).unwrap()), "kept");
+}

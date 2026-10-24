@@ -1,0 +1,1144 @@
+//! The SQLite store: projects, environments, folders, requests, variables, history and
+//! settings.
+//!
+//! One connection, owned by the program's main loop (never shared with other fibers). Schema
+//! changes go through `migrations()` (tracked by `PRAGMA user_version`): append, never edit a
+//! shipped entry. `sqlite.exec` runs ONE statement per call (a second one is silently ignored),
+//! so each migration is a list of statements.
+//!
+//! db/sqlite returns every column as text and NULL as "": the queries wrap nullable columns in
+//! COALESCE so a NULL folder reads as 0.
+
+import std/time;
+import db/sqlite;
+import cookies;
+import model;
+
+pub struct Store {
+    conn: sqlite.Conn,
+}
+
+/// How many executions the history keeps per request.
+pub const HISTORY_KEEP: int = 50;
+
+fn migrations() -> [[string]] {
+    [
+        // 1: the phase 1 schema.
+        [
+            `CREATE TABLE projects (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )`,
+            `CREATE TABLE folders (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )`,
+            "CREATE INDEX folders_project ON folders(project_id)",
+            `CREATE TABLE requests (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                method TEXT NOT NULL DEFAULT 'GET',
+                url TEXT NOT NULL DEFAULT '',
+                params TEXT NOT NULL DEFAULT '[]',
+                headers TEXT NOT NULL DEFAULT '[]',
+                body_type TEXT NOT NULL DEFAULT 'none',
+                body TEXT NOT NULL DEFAULT '',
+                form TEXT NOT NULL DEFAULT '[]',
+                timeout_ms INTEGER NOT NULL DEFAULT 30000,
+                follow_redirects INTEGER NOT NULL DEFAULT 1,
+                max_redirects INTEGER NOT NULL DEFAULT 10,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )`,
+            "CREATE INDEX requests_project ON requests(project_id)",
+            `CREATE TABLE history (
+                id INTEGER PRIMARY KEY,
+                request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+                executed_at INTEGER NOT NULL,
+                method TEXT NOT NULL,
+                url TEXT NOT NULL,
+                status INTEGER NOT NULL,
+                ok INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                size INTEGER NOT NULL,
+                record TEXT NOT NULL
+            )`,
+            "CREATE INDEX history_request ON history(request_id, executed_at)",
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        ],
+        // 2: environments, variables and captures (docs/VARIABLES.md).
+        [
+            `CREATE TABLE environments (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 0,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )`,
+            "CREATE INDEX environments_project ON environments(project_id)",
+            // At most one active environment per project.
+            "CREATE UNIQUE INDEX environments_active ON environments(project_id) WHERE active = 1",
+            `CREATE TABLE environment_variables (
+                id INTEGER PRIMARY KEY,
+                environment_id INTEGER NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                position INTEGER NOT NULL DEFAULT 0
+            )`,
+            "CREATE UNIQUE INDEX environment_variables_key ON environment_variables(environment_id, key)",
+            // environment_id NULL = the folder's default for every environment.
+            `CREATE TABLE folder_variables (
+                id INTEGER PRIMARY KEY,
+                folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                environment_id INTEGER REFERENCES environments(id) ON DELETE CASCADE,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                position INTEGER NOT NULL DEFAULT 0
+            )`,
+            // NULLs are distinct in a plain unique index: one partial index per case.
+            "CREATE UNIQUE INDEX folder_variables_default ON folder_variables(folder_id, key) WHERE environment_id IS NULL",
+            "CREATE UNIQUE INDEX folder_variables_override ON folder_variables(folder_id, environment_id, key) WHERE environment_id IS NOT NULL",
+            "ALTER TABLE requests ADD COLUMN captures TEXT NOT NULL DEFAULT '[]'",
+            // Every existing project gets its environment (R8).
+            "INSERT INTO environments (project_id, name, active, position, created_at, updated_at) SELECT id, 'Default', 1, 1, updated_at, updated_at FROM projects"
+        ],
+        // 3: auth on requests and folders (JSON text, model.auth_text).
+        [
+            `ALTER TABLE requests ADD COLUMN auth TEXT NOT NULL DEFAULT '{"kind":"inherit"}'`,
+            `ALTER TABLE folders ADD COLUMN auth TEXT NOT NULL DEFAULT '{"kind":"inherit"}'`
+        ],
+        // 4: the cookie jar, one per environment (cookies.ray).
+        [
+            `CREATE TABLE cookies (
+                id INTEGER PRIMARY KEY,
+                environment_id INTEGER NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                value TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                host_only INTEGER NOT NULL,
+                path TEXT NOT NULL,
+                expires INTEGER NOT NULL,
+                secure INTEGER NOT NULL,
+                http_only INTEGER NOT NULL,
+                same_site TEXT NOT NULL,
+                created INTEGER NOT NULL
+            )`,
+            "CREATE UNIQUE INDEX cookies_key ON cookies(environment_id, name, domain, path)",
+            "ALTER TABLE requests ADD COLUMN use_cookies INTEGER NOT NULL DEFAULT 1"
+        ]
+    ]
+}
+
+fn int_of(s: string) -> int {
+    parse_int(s).unwrap_or(0)
+}
+
+/// NULL for a 0 id: a root folder or a request outside any folder.
+fn id_or_null(id: int) -> string {
+    if (id == 0) { "NULL" } else { to_string(id) }
+}
+
+pub fn exec(s: Store, sql: string, params: [string]) -> Result<int, string> {
+    sqlite.exec(s.conn, sql, params)
+}
+
+pub fn query(s: Store, sql: string, params: [string]) -> Result<[[string]], string> {
+    sqlite.query(s.conn, sql, params)
+}
+
+/// Opens (or creates) the database at `path` and brings its schema up to date.
+pub fn open(path: string) -> Result<Store, string> {
+    let conn = sqlite.connect(path)?;
+    let s = Store { conn: conn };
+    exec(s, "PRAGMA foreign_keys = ON", [])?;
+    query(s, "PRAGMA journal_mode = WAL", [])?;
+    query(s, "PRAGMA busy_timeout = 5000", [])?;
+    migrate(s)?;
+    Result.Ok(s)
+}
+
+pub fn close_store(s: Store) {
+    sqlite.disconnect(s.conn);
+}
+
+pub fn schema_version(s: Store) -> Result<int, string> {
+    let rows = query(s, "PRAGMA user_version", [])?;
+    Result.Ok(if (rows.len() == 0) { 0 } else { int_of(rows[0][0]) })
+}
+
+fn migrate(s: Store) -> Result<int, string> {
+    let all = migrations();
+    var version = schema_version(s)?;
+    if (version > all.len()) {
+        return Result.Err(
+            "the database has schema version ${version}, newer than this rayreq (${all.len()})"
+        );
+    }
+    while (version < all.len()) {
+        exec(s, "BEGIN", [])?;
+        for stmt in all[version] {
+            match (exec(s, stmt, [])) {
+                Result.Ok(_) => { },
+                Result.Err(e) => {
+                    let _ = exec(s, "ROLLBACK", []);
+                    return Result.Err("migration ${version + 1} failed: ${e}");
+                },
+            }
+        }
+        // PRAGMA takes no parameters; the number is ours.
+        exec(s, "PRAGMA user_version = ${version + 1}", [])?;
+        exec(s, "COMMIT", [])?;
+        version = version + 1;
+    }
+    Result.Ok(version)
+}
+
+/// Runs `f` in a transaction: kept on Ok, undone on Err. A savepoint, so a `tx` inside another
+/// (an import saving folder variables) nests: only the outermost one commits.
+pub fn tx<T>(s: Store, f: fn() -> Result<T, string>) -> Result<T, string> {
+    exec(s, "SAVEPOINT tx", [])?;
+    match (f()) {
+        Result.Ok(v) => {
+            exec(s, "RELEASE tx", [])?;
+            Result.Ok(v)
+        },
+        Result.Err(e) => {
+            let _ = exec(s, "ROLLBACK TO tx", []);
+            let _ = exec(s, "RELEASE tx", []);
+            Result.Err(e)
+        },
+    }
+}
+
+fn last_id(s: Store) -> Result<int, string> {
+    sqlite.last_insert_rowid(s.conn)
+}
+
+fn clean_name(name: string, what: string) -> Result<string, string> {
+    let n = name.trim();
+    if (n == "") {
+        return Result.Err("the ${what} needs a name");
+    }
+    if (n.len() > 200) {
+        return Result.Err("the ${what} name is too long (200 characters at most)");
+    }
+    Result.Ok(n)
+}
+
+// ---- projects ------------------------------------------------------------------------------
+
+fn project_of(row: [string]) -> model.Project {
+    model.Project {
+        id: int_of(row[0]),
+        name: row[1],
+        description: row[2],
+        created_at: int_of(row[3]),
+        updated_at: int_of(row[4])
+    }
+}
+
+const PROJECT_COLS: string = "id, name, description, created_at, updated_at";
+
+pub fn list_projects(s: Store) -> Result<[model.Project], string> {
+    let rows = query(
+        s,
+        "SELECT ${PROJECT_COLS} FROM projects ORDER BY name COLLATE NOCASE, id",
+        []
+    )?;
+    var out: [model.Project] = [];
+    for row in rows {
+        out.push(project_of(row));
+    }
+    Result.Ok(out)
+}
+
+pub fn get_project(s: Store, id: int) -> Result<model.Project, string> {
+    let rows = query(s, "SELECT ${PROJECT_COLS} FROM projects WHERE id = ?", [to_string(id)])?;
+    if (rows.len() == 0) {
+        return Result.Err("project ${id} not found");
+    }
+    Result.Ok(project_of(rows[0]))
+}
+
+/// The new project comes with one active environment named `environment` (R8): the page
+/// passes the name in the user's language.
+pub fn create_project_with(
+    s: Store,
+    name: string,
+    description: string,
+    environment: string
+) -> Result<model.Project, string> {
+    let n = clean_name(name, "project")?;
+    let env_name = clean_name(
+        if (environment.trim() == "") { "Default" } else { environment },
+        "environment"
+    )?;
+    tx(s, fn() -> Result<model.Project, string> {
+        let now = to_string(time.now());
+        exec(
+            s,
+            "INSERT INTO projects (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            [n, description.trim(), now, now]
+        )?;
+        let id = last_id(s)?;
+        exec(
+            s,
+            "INSERT INTO environments (project_id, name, active, position, created_at, updated_at) VALUES (?, ?, 1, 1, ?, ?)",
+            [to_string(id), env_name, now, now]
+        )?;
+        get_project(s, id)
+    })
+}
+
+pub fn create_project(
+    s: Store,
+    name: string,
+    description: string
+) -> Result<model.Project, string> {
+    create_project_with(s, name, description, "Default")
+}
+
+pub fn update_project(
+    s: Store,
+    id: int,
+    name: string,
+    description: string
+) -> Result<model.Project, string> {
+    let n = clean_name(name, "project")?;
+    let changed = exec(
+        s,
+        "UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?",
+        [n, description.trim(), to_string(time.now()), to_string(id)]
+    )?;
+    if (changed == 0) {
+        return Result.Err("project ${id} not found");
+    }
+    get_project(s, id)
+}
+
+/// Deletes the project with its folders, requests and history (ON DELETE CASCADE).
+pub fn delete_project(s: Store, id: int) -> Result<int, string> {
+    exec(s, "DELETE FROM projects WHERE id = ?", [to_string(id)])
+}
+
+// ---- folders -------------------------------------------------------------------------------
+
+fn folder_of(row: [string]) -> model.Folder {
+    model.Folder {
+        id: int_of(row[0]),
+        project_id: int_of(row[1]),
+        parent_id: int_of(row[2]),
+        name: row[3],
+        position: int_of(row[4]),
+        auth: model.auth_from_text(row[5])
+    }
+}
+
+const FOLDER_COLS: string = "id, project_id, COALESCE(parent_id, 0), name, position, auth";
+
+pub fn list_folders(s: Store, project_id: int) -> Result<[model.Folder], string> {
+    let rows = query(
+        s,
+        "SELECT ${FOLDER_COLS} FROM folders WHERE project_id = ? ORDER BY position, id",
+        [to_string(project_id)]
+    )?;
+    var out: [model.Folder] = [];
+    for row in rows {
+        out.push(folder_of(row));
+    }
+    Result.Ok(out)
+}
+
+pub fn get_folder(s: Store, id: int) -> Result<model.Folder, string> {
+    let rows = query(s, "SELECT ${FOLDER_COLS} FROM folders WHERE id = ?", [to_string(id)])?;
+    if (rows.len() == 0) {
+        return Result.Err("folder ${id} not found");
+    }
+    Result.Ok(folder_of(rows[0]))
+}
+
+/// A folder id (0 = root) is a valid place for something of `project_id`.
+fn check_parent(s: Store, project_id: int, folder_id: int) -> Result<int, string> {
+    if (folder_id == 0) {
+        return Result.Ok(0);
+    }
+    let f = get_folder(s, folder_id)?;
+    if (f.project_id != project_id) {
+        return Result.Err("folder ${folder_id} belongs to another project");
+    }
+    Result.Ok(folder_id)
+}
+
+/// The next position among the siblings of `parent` (folders and requests share the order of
+/// their parent, folders first in the tree).
+fn next_position(
+    s: Store,
+    table: string,
+    column: string,
+    project_id: int,
+    parent: int
+) -> Result<int, string> {
+    let rows = if (parent == 0) {
+        query(
+            s,
+            "SELECT COALESCE(MAX(position), 0) FROM ${table} WHERE project_id = ? AND ${column} IS NULL",
+            [to_string(project_id)]
+        )?
+    } else {
+        query(
+            s,
+            "SELECT COALESCE(MAX(position), 0) FROM ${table} WHERE project_id = ? AND ${column} = ?",
+            [to_string(project_id), to_string(parent)]
+        )?
+    };
+    Result.Ok(int_of(rows[0][0]) + 1)
+}
+
+pub fn create_folder(
+    s: Store,
+    project_id: int,
+    parent_id: int,
+    name: string
+) -> Result<model.Folder, string> {
+    let n = clean_name(name, "folder")?;
+    get_project(s, project_id)?;
+    check_parent(s, project_id, parent_id)?;
+    let pos = next_position(s, "folders", "parent_id", project_id, parent_id)?;
+    let now = to_string(time.now());
+    exec(
+        s,
+        "INSERT INTO folders (project_id, parent_id, name, position, created_at, updated_at) VALUES (?, ${id_or_null(parent_id)}, ?, ?, ?, ?)",
+        [to_string(project_id), n, to_string(pos), now, now]
+    )?;
+    get_folder(s, last_id(s)?)
+}
+
+pub fn rename_folder(s: Store, id: int, name: string) -> Result<model.Folder, string> {
+    let n = clean_name(name, "folder")?;
+    let changed = exec(
+        s,
+        "UPDATE folders SET name = ?, updated_at = ? WHERE id = ?",
+        [n, to_string(time.now()), to_string(id)]
+    )?;
+    if (changed == 0) {
+        return Result.Err("folder ${id} not found");
+    }
+    get_folder(s, id)
+}
+
+/// Whether `candidate` is `folder` itself or one of its descendants: moving a folder there
+/// would make a cycle (and detach the whole branch from the tree).
+pub fn is_within(s: Store, candidate: int, folder: int) -> Result<bool, string> {
+    var cur = candidate;
+    var steps = 0;
+    while (cur != 0) {
+        if (cur == folder) {
+            return Result.Ok(true);
+        }
+        cur = get_folder(s, cur)?.parent_id;
+        steps = steps + 1;
+        if (steps > 10000) {
+            return Result.Err("the folder tree has a cycle");
+        }
+    }
+    Result.Ok(false)
+}
+
+pub fn move_folder(s: Store, id: int, parent_id: int) -> Result<model.Folder, string> {
+    let f = get_folder(s, id)?;
+    check_parent(s, f.project_id, parent_id)?;
+    if (is_within(s, parent_id, id)?) {
+        return Result.Err("a folder cannot be moved into itself or one of its subfolders");
+    }
+    if (f.parent_id == parent_id) {
+        return Result.Ok(f);
+    }
+    let pos = next_position(s, "folders", "parent_id", f.project_id, parent_id)?;
+    exec(
+        s,
+        "UPDATE folders SET parent_id = ${id_or_null(parent_id)}, position = ?, updated_at = ? WHERE id = ?",
+        [to_string(pos), to_string(time.now()), to_string(id)]
+    )?;
+    get_folder(s, id)
+}
+
+/// The auth a folder gives the requests below it ("inherit" passes its parent's on).
+pub fn save_folder_auth(s: Store, id: int, a: model.Auth) -> Result<model.Folder, string> {
+    let changed = exec(
+        s,
+        "UPDATE folders SET auth = ?, updated_at = ? WHERE id = ?",
+        [model.auth_text(a), to_string(time.now()), to_string(id)]
+    )?;
+    if (changed == 0) {
+        return Result.Err("folder ${id} not found");
+    }
+    get_folder(s, id)
+}
+
+/// Deletes the folder with its subfolders and their requests (ON DELETE CASCADE).
+pub fn delete_folder(s: Store, id: int) -> Result<int, string> {
+    exec(s, "DELETE FROM folders WHERE id = ?", [to_string(id)])
+}
+
+// ---- requests ------------------------------------------------------------------------------
+
+const REQUEST_COLS: string = "id, project_id, COALESCE(folder_id, 0), name, method, url, params, headers, body_type, body, form, timeout_ms, follow_redirects, max_redirects, position, created_at, updated_at, captures, auth, use_cookies";
+
+fn request_of(row: [string]) -> model.Request {
+    model.Request {
+        id: int_of(row[0]),
+        project_id: int_of(row[1]),
+        folder_id: int_of(row[2]),
+        name: row[3],
+        method: row[4],
+        url: row[5],
+        params: model.pairs_from_text(row[6]),
+        headers: model.pairs_from_text(row[7]),
+        body_type: row[8],
+        body: row[9],
+        form: model.pairs_from_text(row[10]),
+        timeout_ms: int_of(row[11]),
+        follow_redirects: row[12] != "0",
+        max_redirects: int_of(row[13]),
+        position: int_of(row[14]),
+        created_at: int_of(row[15]),
+        updated_at: int_of(row[16]),
+        captures: model.pairs_from_text(row[17]),
+        auth: model.auth_from_text(row[18]),
+        use_cookies: row[19] != "0"
+    }
+}
+
+pub fn list_requests(s: Store, project_id: int) -> Result<[model.Request], string> {
+    let rows = query(
+        s,
+        "SELECT ${REQUEST_COLS} FROM requests WHERE project_id = ? ORDER BY position, id",
+        [to_string(project_id)]
+    )?;
+    var out: [model.Request] = [];
+    for row in rows {
+        out.push(request_of(row));
+    }
+    Result.Ok(out)
+}
+
+/// The stored request, or None when there is none with that id (deleted while its tab was open).
+pub fn find_request(s: Store, id: int) -> Result<Option<model.Request>, string> {
+    let rows = query(s, "SELECT ${REQUEST_COLS} FROM requests WHERE id = ?", [to_string(id)])?;
+    Result.Ok(if (rows.len() == 0) { Option.None } else { Option.Some(request_of(rows[0])) })
+}
+
+pub fn get_request(s: Store, id: int) -> Result<model.Request, string> {
+    let rows = query(s, "SELECT ${REQUEST_COLS} FROM requests WHERE id = ?", [to_string(id)])?;
+    if (rows.len() == 0) {
+        return Result.Err("request ${id} not found");
+    }
+    Result.Ok(request_of(rows[0]))
+}
+
+fn insert_request(s: Store, r: model.Request) -> Result<model.Request, string> {
+    let n = clean_name(r.name, "request")?;
+    get_project(s, r.project_id)?;
+    check_parent(s, r.project_id, r.folder_id)?;
+    let pos = next_position(s, "requests", "folder_id", r.project_id, r.folder_id)?;
+    let now = to_string(time.now());
+    exec(
+        s,
+        "INSERT INTO requests (project_id, folder_id, name, method, url, params, headers, body_type, body, form, captures, auth, use_cookies, timeout_ms, follow_redirects, max_redirects, position, created_at, updated_at) VALUES (?, ${id_or_null(r.folder_id)}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            to_string(r.project_id),
+            n,
+            r.method,
+            r.url,
+            model.pairs_text(r.params),
+            model.pairs_text(r.headers),
+            r.body_type,
+            r.body,
+            model.pairs_text(r.form),
+            model.pairs_text(r.captures),
+            model.auth_text(r.auth),
+            if (r.use_cookies) { "1" } else { "0" },
+            to_string(r.timeout_ms),
+            if (r.follow_redirects) { "1" } else { "0" },
+            to_string(r.max_redirects),
+            to_string(pos),
+            now,
+            now
+        ]
+    )?;
+    get_request(s, last_id(s)?)
+}
+
+pub fn create_request(s: Store, r: model.Request) -> Result<model.Request, string> {
+    insert_request(s, r)
+}
+
+/// Saves the editable fields of `r` over the stored request `r.id`. Its project, folder and
+/// position stay as stored: moving is `move_request`, so a stale draft cannot move it back.
+pub fn save_request(s: Store, r: model.Request) -> Result<model.Request, string> {
+    let n = clean_name(r.name, "request")?;
+    let changed = exec(
+        s,
+        "UPDATE requests SET name = ?, method = ?, url = ?, params = ?, headers = ?, body_type = ?, body = ?, form = ?, captures = ?, auth = ?, use_cookies = ?, timeout_ms = ?, follow_redirects = ?, max_redirects = ?, updated_at = ? WHERE id = ?",
+        [
+            n,
+            r.method,
+            r.url,
+            model.pairs_text(r.params),
+            model.pairs_text(r.headers),
+            r.body_type,
+            r.body,
+            model.pairs_text(r.form),
+            model.pairs_text(r.captures),
+            model.auth_text(r.auth),
+            if (r.use_cookies) { "1" } else { "0" },
+            to_string(r.timeout_ms),
+            if (r.follow_redirects) { "1" } else { "0" },
+            to_string(r.max_redirects),
+            to_string(time.now()),
+            to_string(r.id)
+        ]
+    )?;
+    if (changed == 0) {
+        return Result.Err("request ${r.id} not found");
+    }
+    get_request(s, r.id)
+}
+
+pub fn rename_request(s: Store, id: int, name: string) -> Result<model.Request, string> {
+    let n = clean_name(name, "request")?;
+    let changed = exec(
+        s,
+        "UPDATE requests SET name = ?, updated_at = ? WHERE id = ?",
+        [n, to_string(time.now()), to_string(id)]
+    )?;
+    if (changed == 0) {
+        return Result.Err("request ${id} not found");
+    }
+    get_request(s, id)
+}
+
+pub fn move_request(s: Store, id: int, folder_id: int) -> Result<model.Request, string> {
+    let r = get_request(s, id)?;
+    check_parent(s, r.project_id, folder_id)?;
+    if (r.folder_id == folder_id) {
+        return Result.Ok(r);
+    }
+    let pos = next_position(s, "requests", "folder_id", r.project_id, folder_id)?;
+    exec(
+        s,
+        "UPDATE requests SET folder_id = ${id_or_null(folder_id)}, position = ?, updated_at = ? WHERE id = ?",
+        [to_string(pos), to_string(time.now()), to_string(id)]
+    )?;
+    get_request(s, id)
+}
+
+/// A copy next to the original, named "<name> copy"; the history is not copied.
+pub fn duplicate_request(s: Store, id: int) -> Result<model.Request, string> {
+    var r = get_request(s, id)?;
+    r.name = r.name + " copy";
+    insert_request(s, r)
+}
+
+pub fn delete_request(s: Store, id: int) -> Result<int, string> {
+    exec(s, "DELETE FROM requests WHERE id = ?", [to_string(id)])
+}
+
+// ---- history -------------------------------------------------------------------------------
+
+pub struct HistoryItem {
+    id: int,
+    request_id: int,
+    executed_at: int,
+    method: string,
+    url: string,
+    status: int,
+    ok: bool,
+    duration_ms: int,
+    size: int,
+}
+
+pub fn add_history(
+    s: Store,
+    request_id: int,
+    item: HistoryItem,
+    record: string
+) -> Result<int, string> {
+    exec(
+        s,
+        "INSERT INTO history (request_id, executed_at, method, url, status, ok, duration_ms, size, record) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            to_string(request_id),
+            to_string(item.executed_at),
+            item.method,
+            item.url,
+            to_string(item.status),
+            if (item.ok) { "1" } else { "0" },
+            to_string(item.duration_ms),
+            to_string(item.size),
+            record
+        ]
+    )?;
+    let id = last_id(s)?;
+    // Keep the newest HISTORY_KEEP of this request.
+    exec(
+        s,
+        "DELETE FROM history WHERE request_id = ? AND id NOT IN (SELECT id FROM history WHERE request_id = ? ORDER BY executed_at DESC, id DESC LIMIT ?)",
+        [to_string(request_id), to_string(request_id), to_string(HISTORY_KEEP)]
+    )?;
+    Result.Ok(id)
+}
+
+pub fn list_history(s: Store, request_id: int) -> Result<[HistoryItem], string> {
+    let rows = query(
+        s,
+        "SELECT id, request_id, executed_at, method, url, status, ok, duration_ms, size FROM history WHERE request_id = ? ORDER BY executed_at DESC, id DESC",
+        [to_string(request_id)]
+    )?;
+    var out: [HistoryItem] = [];
+    for row in rows {
+        out.push(
+            HistoryItem {
+                id: int_of(row[0]),
+                request_id: int_of(row[1]),
+                executed_at: int_of(row[2]),
+                method: row[3],
+                url: row[4],
+                status: int_of(row[5]),
+                ok: row[6] == "1",
+                duration_ms: int_of(row[7]),
+                size: int_of(row[8])
+            }
+        );
+    }
+    Result.Ok(out)
+}
+
+pub fn history_record(s: Store, id: int) -> Result<string, string> {
+    let rows = query(s, "SELECT record FROM history WHERE id = ?", [to_string(id)])?;
+    if (rows.len() == 0) {
+        return Result.Err("history entry ${id} not found");
+    }
+    Result.Ok(rows[0][0])
+}
+
+pub fn clear_history(s: Store, request_id: int) -> Result<int, string> {
+    exec(s, "DELETE FROM history WHERE request_id = ?", [to_string(request_id)])
+}
+
+// ---- settings ------------------------------------------------------------------------------
+
+pub fn get_setting(s: Store, key: string) -> Result<Option<string>, string> {
+    let rows = query(s, "SELECT value FROM settings WHERE key = ?", [key])?;
+    Result.Ok(if (rows.len() == 0) { Option.None } else { Option.Some(rows[0][0]) })
+}
+
+pub fn set_setting(s: Store, key: string, value: string) -> Result<int, string> {
+    exec(
+        s,
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value]
+    )
+}
+
+pub fn all_settings(s: Store) -> Result<[(string, string)], string> {
+    let rows = query(s, "SELECT key, value FROM settings ORDER BY key", [])?;
+    var out: [(string, string)] = [];
+    for row in rows {
+        out.push((row[0], row[1]));
+    }
+    Result.Ok(out)
+}
+
+// ---- environments --------------------------------------------------------------------------
+
+const ENV_COLS: string = "id, project_id, name, active, position";
+
+fn environment_of(row: [string]) -> model.Environment {
+    model.Environment {
+        id: int_of(row[0]),
+        project_id: int_of(row[1]),
+        name: row[2],
+        active: row[3] == "1",
+        position: int_of(row[4])
+    }
+}
+
+pub fn list_environments(s: Store, project_id: int) -> Result<[model.Environment], string> {
+    let rows = query(
+        s,
+        "SELECT ${ENV_COLS} FROM environments WHERE project_id = ? ORDER BY position, id",
+        [to_string(project_id)]
+    )?;
+    var out: [model.Environment] = [];
+    for row in rows {
+        out.push(environment_of(row));
+    }
+    Result.Ok(out)
+}
+
+pub fn get_environment(s: Store, id: int) -> Result<model.Environment, string> {
+    let rows = query(s, "SELECT ${ENV_COLS} FROM environments WHERE id = ?", [to_string(id)])?;
+    if (rows.len() == 0) {
+        return Result.Err("environment ${id} not found");
+    }
+    Result.Ok(environment_of(rows[0]))
+}
+
+/// The active environment of a project; None only for a database edited by hand.
+pub fn active_environment(s: Store, project_id: int) -> Result<Option<model.Environment>, string> {
+    let rows = query(
+        s,
+        "SELECT ${ENV_COLS} FROM environments WHERE project_id = ? AND active = 1",
+        [to_string(project_id)]
+    )?;
+    Result.Ok(if (rows.len() == 0) { Option.None } else { Option.Some(environment_of(rows[0])) })
+}
+
+/// A new environment, last in the list; with `copy_from` > 0, a copy of that one's variables.
+/// The first environment of a project becomes the active one.
+pub fn create_environment(
+    s: Store,
+    project_id: int,
+    name: string,
+    copy_from: int
+) -> Result<model.Environment, string> {
+    let n = clean_name(name, "environment")?;
+    get_project(s, project_id)?;
+    if (copy_from > 0 && get_environment(s, copy_from)?.project_id != project_id) {
+        return Result.Err("environment ${copy_from} belongs to another project");
+    }
+    tx(s, fn() -> Result<model.Environment, string> {
+        let rows = query(
+            s,
+            "SELECT COALESCE(MAX(position), 0), COUNT(*) FROM environments WHERE project_id = ?",
+            [to_string(project_id)]
+        )?;
+        let first = int_of(rows[0][1]) == 0;
+        let now = to_string(time.now());
+        exec(
+            s,
+            "INSERT INTO environments (project_id, name, active, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                to_string(project_id),
+                n,
+                if (first) { "1" } else { "0" },
+                to_string(int_of(rows[0][0]) + 1),
+                now,
+                now
+            ]
+        )?;
+        let id = last_id(s)?;
+        if (copy_from > 0) {
+            exec(
+                s,
+                "INSERT INTO environment_variables (environment_id, key, value, enabled, position) SELECT ?, key, value, enabled, position FROM environment_variables WHERE environment_id = ?",
+                [to_string(id), to_string(copy_from)]
+            )?;
+            exec(
+                s,
+                "INSERT INTO folder_variables (folder_id, environment_id, key, value, enabled, position) SELECT folder_id, ?, key, value, enabled, position FROM folder_variables WHERE environment_id = ?",
+                [to_string(id), to_string(copy_from)]
+            )?;
+        }
+        get_environment(s, id)
+    })
+}
+
+pub fn rename_environment(s: Store, id: int, name: string) -> Result<model.Environment, string> {
+    let n = clean_name(name, "environment")?;
+    let changed = exec(
+        s,
+        "UPDATE environments SET name = ?, updated_at = ? WHERE id = ?",
+        [n, to_string(time.now()), to_string(id)]
+    )?;
+    if (changed == 0) {
+        return Result.Err("environment ${id} not found");
+    }
+    get_environment(s, id)
+}
+
+/// Makes `id` the active environment of its project (and no other).
+pub fn activate_environment(s: Store, id: int) -> Result<model.Environment, string> {
+    let e = get_environment(s, id)?;
+    tx(s, fn() -> Result<model.Environment, string> {
+        exec(
+            s,
+            "UPDATE environments SET active = 0 WHERE project_id = ? AND active = 1",
+            [to_string(e.project_id)]
+        )?;
+        exec(s, "UPDATE environments SET active = 1 WHERE id = ?", [to_string(id)])?;
+        get_environment(s, id)
+    })
+}
+
+/// Deletes an environment with its variables and folder overrides. The last one of a project
+/// cannot go (R8); deleting the active one activates the first that remains.
+pub fn delete_environment(s: Store, id: int) -> Result<int, string> {
+    let e = get_environment(s, id)?;
+    let rest = list_environments(s, e.project_id)?;
+    if (rest.len() <= 1) {
+        return Result.Err("a project needs at least one environment");
+    }
+    tx(s, fn() -> Result<int, string> {
+        let n = exec(s, "DELETE FROM environments WHERE id = ?", [to_string(id)])?;
+        if (e.active) {
+            for other in rest {
+                if (other.id != id) {
+                    exec(
+                        s,
+                        "UPDATE environments SET active = 1 WHERE id = ?",
+                        [to_string(other.id)]
+                    )?;
+                    break;
+                }
+            }
+        }
+        Result.Ok(n)
+    })
+}
+
+// ---- variables -----------------------------------------------------------------------------
+
+fn variables_of(rows: [[string]]) -> [model.Pair] {
+    var out: [model.Pair] = [];
+    for row in rows {
+        out.push(model.Pair { key: row[0], value: row[1], enabled: row[2] == "1" });
+    }
+    out
+}
+
+/// Inserts `vars` (already cleaned) with `sql`, whose first parameters are `lead`.
+fn insert_variables(
+    s: Store,
+    sql: string,
+    lead: [string],
+    vars: [model.Pair]
+) -> Result<int, string> {
+    var pos = 0;
+    for v in vars {
+        pos = pos + 1;
+        // A copy: arrays are shared on assignment.
+        var params = [] + lead;
+        params.push(v.key);
+        params.push(v.value);
+        params.push(if (v.enabled) { "1" } else { "0" });
+        params.push(to_string(pos));
+        exec(s, sql, params)?;
+    }
+    Result.Ok(pos)
+}
+
+pub fn environment_variables(s: Store, environment_id: int) -> Result<[model.Pair], string> {
+    let rows = query(
+        s,
+        "SELECT key, value, enabled FROM environment_variables WHERE environment_id = ? ORDER BY position, id",
+        [to_string(environment_id)]
+    )?;
+    Result.Ok(variables_of(rows))
+}
+
+/// Replaces the whole table of an environment (the editor saves it at once).
+pub fn save_environment_variables(
+    s: Store,
+    environment_id: int,
+    vars: [model.Pair]
+) -> Result<[model.Pair], string> {
+    let clean = model.clean_variables(vars)?;
+    get_environment(s, environment_id)?;
+    tx(s, fn() -> Result<int, string> {
+        exec(
+            s,
+            "DELETE FROM environment_variables WHERE environment_id = ?",
+            [to_string(environment_id)]
+        )?;
+        insert_variables(
+            s,
+            "INSERT INTO environment_variables (environment_id, key, value, enabled, position) VALUES (?, ?, ?, ?, ?)",
+            [to_string(environment_id)],
+            clean
+        )
+    })?;
+    environment_variables(s, environment_id)
+}
+
+/// Sets one variable of an environment, enabled, keeping its place if it exists (a capture).
+pub fn set_environment_variable(
+    s: Store,
+    environment_id: int,
+    key: string,
+    value: string
+) -> Result<int, string> {
+    if (!model.valid_variable_name(key)) {
+        return Result.Err("invalid variable name '${key}'");
+    }
+    get_environment(s, environment_id)?;
+    exec(
+        s,
+        "INSERT INTO environment_variables (environment_id, key, value, enabled, position) VALUES (?, ?, ?, 1, (SELECT COALESCE(MAX(position), 0) + 1 FROM environment_variables WHERE environment_id = ?)) ON CONFLICT(environment_id, key) DO UPDATE SET value = excluded.value, enabled = 1",
+        [to_string(environment_id), key, value, to_string(environment_id)]
+    )
+}
+
+/// The checked environment of a folder's override (0 = the folder's defaults).
+fn check_folder_environment(s: Store, folder_id: int, environment_id: int) -> Result<int, string> {
+    let f = get_folder(s, folder_id)?;
+    if (environment_id != 0 && get_environment(s, environment_id)?.project_id != f.project_id) {
+        return Result.Err("environment ${environment_id} belongs to another project");
+    }
+    Result.Ok(environment_id)
+}
+
+/// A folder's defaults (`environment_id` 0) or its override for one environment.
+pub fn folder_variables(
+    s: Store,
+    folder_id: int,
+    environment_id: int
+) -> Result<[model.Pair], string> {
+    let rows = if (environment_id == 0) {
+        query(
+            s,
+            "SELECT key, value, enabled FROM folder_variables WHERE folder_id = ? AND environment_id IS NULL ORDER BY position, id",
+            [to_string(folder_id)]
+        )?
+    } else {
+        query(
+            s,
+            "SELECT key, value, enabled FROM folder_variables WHERE folder_id = ? AND environment_id = ? ORDER BY position, id",
+            [to_string(folder_id), to_string(environment_id)]
+        )?
+    };
+    Result.Ok(variables_of(rows))
+}
+
+pub fn save_folder_variables(
+    s: Store,
+    folder_id: int,
+    environment_id: int,
+    vars: [model.Pair]
+) -> Result<[model.Pair], string> {
+    let clean = model.clean_variables(vars)?;
+    check_folder_environment(s, folder_id, environment_id)?;
+    tx(s, fn() -> Result<int, string> {
+        if (environment_id == 0) {
+            exec(
+                s,
+                "DELETE FROM folder_variables WHERE folder_id = ? AND environment_id IS NULL",
+                [to_string(folder_id)]
+            )?;
+        } else {
+            exec(
+                s,
+                "DELETE FROM folder_variables WHERE folder_id = ? AND environment_id = ?",
+                [to_string(folder_id), to_string(environment_id)]
+            )?;
+        }
+        insert_variables(
+            s,
+            "INSERT INTO folder_variables (folder_id, environment_id, key, value, enabled, position) VALUES (?, ${id_or_null(environment_id)}, ?, ?, ?, ?)",
+            [to_string(folder_id)],
+            clean
+        )
+    })?;
+    folder_variables(s, folder_id, environment_id)
+}
+
+// ---- cookies -------------------------------------------------------------------------------
+
+const COOKIE_COLS: string = "name, value, domain, host_only, path, expires, secure, http_only, same_site, created";
+
+fn cookie_of(row: [string]) -> cookies.Cookie {
+    cookies.Cookie {
+        name: row[0],
+        value: row[1],
+        domain: row[2],
+        host_only: row[3] == "1",
+        path: row[4],
+        expires: int_of(row[5]),
+        secure: row[6] == "1",
+        http_only: row[7] == "1",
+        same_site: row[8],
+        created: int_of(row[9])
+    }
+}
+
+/// The jar of an environment without its expired cookies, by domain, path and name.
+pub fn list_cookies(s: Store, environment_id: int) -> Result<[cookies.Cookie], string> {
+    let rows = query(
+        s,
+        "SELECT ${COOKIE_COLS} FROM cookies WHERE environment_id = ? AND (expires = 0 OR expires > ?) ORDER BY domain, path, name",
+        [to_string(environment_id), to_string(time.now())]
+    )?;
+    var out: [cookies.Cookie] = [];
+    for row in rows {
+        out.push(cookie_of(row));
+    }
+    Result.Ok(out)
+}
+
+/// Replaces the jar of an environment (the main loop applies a send's Set-Cookie lines to the
+/// stored jar, then writes it back).
+pub fn save_cookies(s: Store, environment_id: int, jar: [cookies.Cookie]) -> Result<int, string> {
+    tx(s, fn() -> Result<int, string> {
+        exec(s, "DELETE FROM cookies WHERE environment_id = ?", [to_string(environment_id)])?;
+        for c in jar {
+            exec(
+                s,
+                "INSERT INTO cookies (environment_id, ${COOKIE_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    to_string(environment_id),
+                    c.name,
+                    c.value,
+                    c.domain,
+                    if (c.host_only) { "1" } else { "0" },
+                    c.path,
+                    to_string(c.expires),
+                    if (c.secure) { "1" } else { "0" },
+                    if (c.http_only) { "1" } else { "0" },
+                    c.same_site,
+                    to_string(c.created)
+                ]
+            )?;
+        }
+        Result.Ok(jar.len())
+    })
+}
+
+pub fn delete_cookie(
+    s: Store,
+    environment_id: int,
+    name: string,
+    domain: string,
+    path: string
+) -> Result<int, string> {
+    exec(
+        s,
+        "DELETE FROM cookies WHERE environment_id = ? AND name = ? AND domain = ? AND path = ?",
+        [to_string(environment_id), name, domain, path]
+    )
+}
+
+pub fn clear_cookies(s: Store, environment_id: int) -> Result<int, string> {
+    exec(s, "DELETE FROM cookies WHERE environment_id = ?", [to_string(environment_id)])
+}
+
+/// At start: session cookies (no Expires/Max-Age) end with the session, as in a browser; the
+/// expired ones go too.
+pub fn end_cookie_session(s: Store) -> Result<int, string> {
+    exec(s, "DELETE FROM cookies WHERE expires = 0 OR expires <= ?", [to_string(time.now())])
+}

@@ -1,0 +1,124 @@
+//! Auth: which one applies to a request (its own, or inherited from the nearest folder above
+//! that has one) and what it adds to the request (a header or a query parameter).
+//!
+//! In a send: `effective` → its fields resolved with the request's variables (vars.ray) →
+//! `apply` on the resolved copy → exec.prepare. A header the user wrote by hand with the same
+//! name wins over the generated one.
+
+import std/base64;
+import std/url;
+import model;
+import store;
+import vars;
+
+/// The auth a request uses and where it comes from: `from` is "request", "folder" (`source` =
+/// the folder's name) or "none" (nothing up the chain has one).
+pub struct Effective {
+    auth: model.Auth,
+    from: string,
+    source: string,
+}
+
+/// `r`'s own auth unless it inherits; then the nearest folder above `folder_id` (deepest
+/// first) whose auth is not "inherit". A store error is an error.
+pub fn effective(s: store.Store, r: model.Request, folder_id: int) -> Result<Effective, string> {
+    if (r.auth.kind != "inherit") {
+        return Result.Ok(Effective { auth: r.auth, from: "request", source: "" });
+    }
+    let chain = vars.ancestry(s, folder_id)?;
+    var i = chain.len() - 1;
+    while (i >= 0) {
+        let f = chain[i];
+        if (f.auth.kind != "inherit") {
+            return Result.Ok(Effective { auth: f.auth, from: "folder", source: f.name });
+        }
+        i = i - 1;
+    }
+    Result.Ok(Effective { auth: model.auth_of_kind("none"), from: "none", source: "" })
+}
+
+fn has_header(r: model.Request, name: string) -> bool {
+    let low = name.to_lower();
+    for h in r.headers {
+        if (h.enabled && h.key.trim().to_lower() == low) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `url` with `name=value` added to its query (before a fragment), both percent-encoded.
+fn add_query(u: string, name: string, value: string) -> string {
+    let (base, fragment) = match (u.index_of("#")) {
+        Option.Some(i) => (u.substring(0, i), u.substring(i, u.len())),
+        Option.None => (u, ""),
+    };
+    let sep = if (!base.contains("?")) {
+        "?"
+    } else if (base.ends_with("?") || base.ends_with("&")) {
+        ""
+    } else {
+        "&"
+    };
+    "${base}${sep}${url.url_encode(name)}=${url.url_encode(value)}${fragment}"
+}
+
+fn has_query_param(u: string, name: string) -> bool {
+    let q = match (u.index_of("?")) {
+        Option.Some(i) => u.substring(i + 1, u.len()).split("#")[0],
+        Option.None => return false,
+    };
+    for part in q.split("&") {
+        let k = part.split("=")[0];
+        if (k == name || k == url.url_encode(name) || url.url_decode(k).unwrap_or(k) == name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// A copy of `r` (variables already resolved) with its auth added, and the lower-case names of
+/// the headers that carry credentials beyond Authorization (for redirects).
+pub fn apply(r: model.Request) -> Result<(model.Request, [string]), string> {
+    let a = r.auth;
+    var out = r.clone();
+    var headers = [] + r.headers;
+    var extra: [string] = [];
+    match (a.kind) {
+        "basic" => if (!has_header(r, "authorization")) {
+            if (a.username.contains(":")) {
+                return Result.Err("a Basic auth user name cannot contain ':'");
+            }
+            let token = base64.base64("${a.username}:${a.password}".to_bytes());
+            headers.push(
+                model.Pair { key: "Authorization", value: "Basic ${token}", enabled: true }
+            );
+        },
+        "bearer" => if (!has_header(r, "authorization")) {
+            let token = a.token.trim();
+            if (token == "") {
+                return Result.Err("the Bearer token is empty");
+            }
+            headers.push(
+                model.Pair { key: "Authorization", value: "Bearer ${token}", enabled: true }
+            );
+        },
+        "apikey" => {
+            let name = a.key.trim();
+            if (name == "") {
+                return Result.Err("the API key needs a name");
+            }
+            if (a.add_to == "query") {
+                if (!has_query_param(r.url, name)) {
+                    out.url = add_query(r.url, name, a.value);
+                }
+            } else if (!has_header(r, name)) {
+                headers.push(model.Pair { key: name, value: a.value, enabled: true });
+                extra.push(name.to_lower());
+            }
+        },
+        _ => { },
+    }
+    out.headers = headers;
+    Result.Ok((out, extra))
+}

@@ -1,0 +1,109 @@
+//! Captures: after a send, values of the JSON response written into the environment the
+//! request was resolved with. Every capture reports what happened to it (R5 of
+//! docs/VARIABLES.md); none is a silent no-op.
+
+import std/json;
+import exec;
+import jpath;
+import jsonv;
+import model;
+import store;
+
+/// What happened to one capture: `status` is one of "applied", "no_active_environment",
+/// "invalid_json", "path_not_found", "skipped_error_status" or "failed" (`detail` says why).
+pub struct Captured {
+    variable: string,
+    path: string,
+    status: string,
+    value: string,
+    detail: string,
+}
+
+fn result(c: model.Pair, status: string, value: string, detail: string) -> Captured {
+    Captured {
+        variable: c.key.trim(),
+        path: c.value.trim(),
+        status: status,
+        value: value,
+        detail: detail
+    }
+}
+
+fn is_2xx(status: int) -> bool {
+    status >= 200 && status < 300
+}
+
+/// Applies the enabled `captures` of a send whose variables came from environment
+/// `environment_id` (0 = none) to that environment.
+pub fn apply(
+    s: store.Store,
+    environment_id: int,
+    captures: [model.Pair],
+    o: exec.Outcome
+) -> [Captured] {
+    var out: [Captured] = [];
+    let text = from_utf8(o.body);
+    for c in captures {
+        if (!c.enabled || (c.key.trim() == "" && c.value.trim() == "")) {
+            continue;
+        }
+        let name = c.key.trim();
+        if (!model.valid_variable_name(name)) {
+            out.push(result(c, "failed", "", "invalid variable name '${name}'"));
+            continue;
+        }
+        let path = match (jpath.parse_path(c.value)) {
+            Result.Ok(p) => p,
+            Result.Err(e) => {
+                out.push(result(c, "failed", "", e));
+                continue;
+            },
+        };
+        if (!o.ok) {
+            out.push(result(c, "failed", "", "no response: ${o.error}"));
+            continue;
+        }
+        if (!is_2xx(o.status)) {
+            out.push(result(c, "skipped_error_status", "", "status ${o.status}"));
+            continue;
+        }
+        if (environment_id == 0) {
+            out.push(result(c, "no_active_environment", "", ""));
+            continue;
+        }
+        let body = match (text) {
+            Result.Ok(t) => t,
+            Result.Err(_) => {
+                out.push(result(c, "invalid_json", "", "the body is not UTF-8 text"));
+                continue;
+            },
+        };
+        match (jpath.value_at(body, path)) {
+            Result.Ok(v) => match (store.set_environment_variable(s, environment_id, name, v)) {
+                Result.Ok(_) => out.push(result(c, "applied", v, "")),
+                Result.Err(e) => out.push(result(c, "failed", v, e)),
+            },
+            Result.Err(jpath.Miss.Invalid) => out.push(result(c, "invalid_json", "", "")),
+            Result.Err(jpath.Miss.NotFound) => out.push(result(c, "path_not_found", "", "")),
+        }
+    }
+    out
+}
+
+pub fn captured_json(cs: [Captured]) -> json.Json {
+    var out: [json.Json] = [];
+    for c in cs {
+        out.push(
+            jsonv.obj(
+                [
+                    ("variable", jsonv.str(c.variable)),
+                    ("path", jsonv.str(c.path)),
+                    ("status", jsonv.str(c.status)),
+                    ("value", jsonv.str(c.value)),
+                    ("detail", jsonv.str(c.detail))
+                ]
+            )
+        );
+    }
+    jsonv.arr(out)
+}

@@ -1,0 +1,75 @@
+// The ordered tree: JSON in and out with the keys in their order and the numbers as written.
+
+import node;
+from node import Node;
+
+fn parsed(s: string) -> Node {
+    match (node.parse_json(s)) {
+        Result.Ok(n) => n,
+        Result.Err(e) => panic(e),
+    }
+}
+
+@test
+fn keys_keep_their_order_and_numbers_their_text() {
+    let n = parsed(` {"z": 1, "a": [true, null, -0.5e3], "id": 9007199254740993, "m": {}} `);
+    assert_eq(node.entries(n).map(fn(e: (string, Node)) -> string { e.0 }), ["z", "a", "id", "m"]);
+    assert_eq(node.to_json(n, 0), `{"z":1,"a":[true,null,-0.5e3],"id":9007199254740993,"m":{}}`);
+    assert_eq(node.to_json(n, 2), `{
+  "z": 1,
+  "a": [
+    true,
+    null,
+    -0.5e3
+  ],
+  "id": 9007199254740993,
+  "m": {}
+}`);
+}
+
+@test
+fn strings_and_escapes() {
+    let n = parsed(`["a\\"b\\\\c\\/\\n\\u00e9\\ud83d\\ude00", "\\ud800x"]`);
+    assert_eq(node.text(node.items(n)[0]).unwrap(), "a\"b\\c/\né😀");
+    assert_eq(
+        node.text(node.items(n)[1]).unwrap(),
+        char_from_code(0xFFFD).unwrap().to_string() + "x"
+    );
+    assert_eq(node.quote("a\"\\\n\u{1}ñ"), `"a\\"\\\\\\n\\u0001ñ"`);
+}
+
+@test
+fn a_repeated_key_keeps_its_place_and_the_last_value() {
+    assert_eq(node.to_json(parsed(`{"a":1,"b":2,"a":3}`), 0), `{"a":3,"b":2}`);
+}
+
+@test
+fn errors_say_where() {
+    for (text, want) in [
+        ("{\"a\" 1}", "line 1 column 6: expected ':'"),
+        ("[1,\n 2,]", "line 2 column 4: unexpected ']'"),
+        ("[01]", "expected ',' or ']'"),
+        ("\"abc", "unterminated string"),
+        ("{} x", "unexpected text after the document"),
+        ("", "unexpected end of the text"),
+        ("tru", "expected 'true'"),
+        ("\"\\q\"", "invalid escape")
+    ] {
+        match (node.parse_json(text)) {
+            Result.Ok(_) => panic("accepted ${text}"),
+            Result.Err(e) => assert_eq_msg(e.contains(want), true, e),
+        }
+    }
+    assert(node.parse_json("[".repeat(300) + "]".repeat(300)).is_err());
+}
+
+@test
+fn pointers() {
+    let n = parsed(`{"components": {"schemas": {"a/b": {"x": [10, 20]}, "c~d": 1, "e f": 2}}}`);
+    assert_eq(node.to_json(node.pointer(n, "#/components/schemas/a~1b/x/1").unwrap(), 0), "20");
+    assert_eq(node.to_json(node.pointer(n, "#/components/schemas/c~0d").unwrap(), 0), "1");
+    assert_eq(node.to_json(node.pointer(n, "#/components/schemas/e%20f").unwrap(), 0), "2");
+    assert(node.pointer(n, "#/components/nope").is_none());
+    assert(node.pointer(n, "other.yaml#/x").is_none());
+    assert(node.pointer(n, "#").is_some());
+}
