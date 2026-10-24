@@ -371,6 +371,7 @@ fn a_migrated_database_gives_every_project_an_environment() {
     let s = store.open(path).unwrap();
     for sql in [
         "DROP TABLE oauth_tokens",
+        "ALTER TABLE requests DROP COLUMN parts",
         "DROP TABLE cookies",
         "ALTER TABLE requests DROP COLUMN use_cookies",
         "DROP TABLE folder_variables",
@@ -387,7 +388,7 @@ fn a_migrated_database_gives_every_project_an_environment() {
     }
     store.close_store(s);
     let again = store.open(path).unwrap();
-    assert_eq(store.schema_version(again).unwrap(), 5);
+    assert_eq(store.schema_version(again).unwrap(), 6);
     let envs = store.list_environments(again, 1).unwrap();
     assert_eq(envs.len(), 1);
     assert(envs[0].active);

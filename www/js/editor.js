@@ -5,12 +5,12 @@
 import * as A from "./actions.js";
 import { t } from "./i18n.js";
 import { AUTH_NAMES, AuthEditor } from "./auth.js";
-import { KvEditor } from "./kv.js";
+import { KvEditor, PartsEditor } from "./kv.js";
 import { activeTab, emit, on, state } from "./state.js";
 import { $, debounce, paramsFromUrl, reindentJson, urlFromParams } from "./util.js";
 import { refreshVariables, refreshVariablesSoon, renderVariables } from "./variables.js";
 
-let params, headers, form, captures, authEditor;
+let params, headers, form, parts, captures, authEditor;
 let loading = false; // set while the fields are filled from a draft: no echo back
 
 function draft() {
@@ -46,13 +46,15 @@ function bodyTypes() {
     { value: "text", label: t("body.typeText") },
     { value: "xml", label: "XML" },
     { value: "form", label: t("body.typeForm") },
+    { value: "multipart", label: "Multipart" },
   ];
 }
 
 function showBodyEditor(d) {
   const type = d.body_type;
-  $("body").hidden = type === "none" || type === "form";
+  $("body").hidden = type === "none" || type === "form" || type === "multipart";
   $("form").hidden = type !== "form";
+  $("parts").hidden = type !== "multipart";
   $("body-none").hidden = type !== "none";
   $("format-body").hidden = type !== "json";
   validateBody();
@@ -86,6 +88,7 @@ export function loadEditor() {
   params.set(d.params);
   headers.set(d.headers);
   form.set(d.form);
+  parts.set(d.parts);
   captures.set(d.captures || []);
   authEditor.set(d.auth);
   authEditor.setInfo("");
@@ -172,6 +175,15 @@ export function initEditor() {
       const d = draft();
       if (!d || loading) return;
       d.auth = a;
+      changed();
+    },
+  });
+
+  parts = new PartsEditor($("parts"), {
+    onChange: (rows) => {
+      const d = draft();
+      if (!d || loading) return;
+      d.parts = rows;
       changed();
     },
   });

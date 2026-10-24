@@ -5,6 +5,7 @@
 import std/url;
 import exec;
 import model;
+import multipart;
 import urls;
 
 pub struct Imported {
@@ -476,6 +477,71 @@ fn suggested_name(method: string, u: string) -> string {
     }
 }
 
+/// One `-F name=content` (or `--form-string name=value`, taken literally): a text part, a file
+/// part (`@path`), with `;type=` and `;filename=` read. Also a note for what changes.
+fn form_part(v: string, literal: bool) -> Result<(model.Part, string), string> {
+    let eq = match (v.index_of("=")) {
+        Option.Some(i) => i,
+        Option.None => return Result.Err("ignored the form field '${v}' (no '=')"),
+    };
+    let name = v.substring(0, eq);
+    let rest = v.substring(eq + 1, v.len());
+    var part = model.Part { key: name, value: rest, enabled: true, file: false, content_type: "" };
+    if (literal) {
+        return Result.Ok((part, ""));
+    }
+    // The content, then ;key=value modifiers (a "quoted" content may hold ';').
+    var content = rest;
+    var mods = "";
+    if (rest.starts_with("\"") || rest.starts_with("@\"") || rest.starts_with("<\"")) {
+        let lead = if (rest.starts_with("\"")) { 0 } else { 1 };
+        let cs = rest.chars();
+        var i = lead + 1;
+        var parts: [string] = [];
+        while (i < cs.len() && cs[i] != '"') {
+            if (cs[i] == '\\' && i + 1 < cs.len()) {
+                i = i + 1;
+            }
+            parts.push(cs[i].to_string());
+            i = i + 1;
+        }
+        content = rest.substring(0, lead) + parts.join("");
+        mods = if (i + 1 < cs.len()) { rest.substring(i + 1, rest.len()) } else { "" };
+    } else {
+        match (rest.index_of(";")) {
+            Option.Some(i) => {
+                content = rest.substring(0, i);
+                mods = rest.substring(i, rest.len());
+            },
+            Option.None => { },
+        }
+    }
+    var note = "";
+    for m in mods.split(
+        ";"
+    ) {
+        let t = m.trim();
+        if (t.starts_with("type=")) {
+            part.content_type = t.substring(5, t.len());
+        } else if (t.starts_with("filename=")) {
+            note = "the file name '${t.substring(9, t.len())}' of '${name}' was not kept: the file's own name is sent";
+        } else if (t != "" && !t.starts_with("headers=") && !t.starts_with("encoder=")) {
+            note = "ignored ';${t}' in the form field '${name}'";
+        }
+    }
+    if (content.starts_with("@")) {
+        part.file = true;
+        part.value = content.substring(1, content.len());
+    } else if (content.starts_with("<")) {
+        part.file = true;
+        part.value = content.substring(1, content.len());
+        note = "'${name}' was the text of the file ${part.value}: it is sent as that file, with its name";
+    } else {
+        part.value = content;
+    }
+    Result.Ok((part, note))
+}
+
 /// A curl command as a request draft (no id, no project: the caller places it).
 pub fn parse(text: string) -> Result<Imported, string> {
     let trimmed = text.trim();
@@ -503,6 +569,7 @@ pub fn parse(text: string) -> Result<Imported, string> {
     var follow = false;
     var max_redirs = model.DEFAULT_MAX_REDIRECTS;
     var headers: [model.Pair] = [];
+    var forms: [model.Part] = [];
     for o in options(
         words.slice(1, words.len())
     )? {
@@ -553,7 +620,15 @@ pub fn parse(text: string) -> Result<Imported, string> {
             data.push(v);
             json_body = true;
         } else if (n == "form" || n == "form-string") {
-            warnings.push("multipart form fields (-F '${v}') are not supported and were left out");
+            match (form_part(v, n == "form-string")) {
+                Result.Ok((part, note)) => {
+                    forms.push(part);
+                    if (note != "") {
+                        warnings.push(note);
+                    }
+                },
+                Result.Err(e) => warnings.push(e),
+            }
         } else if (n == "user") {
             var a = model.auth_of_kind("basic");
             match (v.index_of(":")) {
@@ -634,7 +709,7 @@ pub fn parse(text: string) -> Result<Imported, string> {
         method
     } else if (head) {
         "HEAD"
-    } else if (get || data.len() == 0) {
+    } else if (get || (data.len() == 0 && forms.len() == 0)) {
         "GET"
     } else {
         "POST"
@@ -648,9 +723,24 @@ pub fn parse(text: string) -> Result<Imported, string> {
     } else {
         max_redirs
     };
+    // -F: a multipart body (curl refuses -F with -d; the form wins here).
+    if (forms.len() > 0) {
+        if (data.len() > 0) {
+            warnings.push("-d and -F do not go together: the -d data was left out");
+        }
+        r.body_type = "multipart";
+        r.parts = forms;
+        // Its boundary comes with the body at send time; one written by hand is kept.
+        if let Option.Some(c) = header_value(headers, "content-type") {
+            if (c.to_lower().starts_with("multipart/form-data")
+                && !c.to_lower().contains("boundary=")) {
+                headers = without_header(headers, "content-type");
+            }
+        }
+    }
     // The body and its type, from the Content-Type it goes with (curl's default for -d is a
     // urlencoded form).
-    if (!get && data.len() > 0) {
+    if (!get && data.len() > 0 && forms.len() == 0) {
         if (json_body) {
             if (header_value(headers, "content-type").is_none()) {
                 headers.push(pair("Content-Type", "application/json"));
@@ -707,6 +797,29 @@ pub fn parse(text: string) -> Result<Imported, string> {
 
 // ---- writing -------------------------------------------------------------------------------
 
+/// One part as curl's -F: a file as `name=@"path";type=…`, text literally (`--form-string`)
+/// unless it has a type of its own.
+fn form_option(x: model.Part) -> string {
+    let name = x.key.trim();
+    if (x.file) {
+        let t = if (x.content_type != "") {
+            x.content_type
+        } else {
+            multipart.type_for(multipart.base_name(x.value))
+        };
+        return "-F " + quote("${name}=@${curl_quoted(x.value.trim())};type=${t}");
+    }
+    if (x.content_type == "") {
+        return "--form-string " + quote("${name}=${x.value}");
+    }
+    "-F " + quote("${name}=${curl_quoted(x.value)};type=${x.content_type}")
+}
+
+/// A -F value in curl's own double quotes (`"` and `\` escaped).
+fn curl_quoted(s: string) -> string {
+    "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+}
+
 /// `s` as one bash word: single quotes, a quote inside written as '\''.
 pub fn quote(s: string) -> string {
     "'" + s.replace("'", "'\\''") + "'"
@@ -715,7 +828,8 @@ pub fn quote(s: string) -> string {
 /// The send `p` (prepared, variables and auth applied) as a curl command, one option per line.
 /// The defaults rayreq adds on its own (Accept, User-Agent) are left to curl's; `cookie` is
 /// the jar's Cookie header for the URL ("" for none).
-pub fn command(p: exec.Prepared, cookie: string) -> string {
+pub fn command(p: exec.Prepared, cookie: string, parts: [model.Part]) -> string {
+    let form = parts.filter(fn(x: model.Part) -> bool { x.enabled && x.key.trim() != "" });
     var lines: [string] = [];
     let target = urls.render(p.url);
     var first = "curl";
@@ -730,12 +844,20 @@ pub fn command(p: exec.Prepared, cookie: string) -> string {
         if ((low == "accept" && v == "*/*") || (low == "user-agent" && v == exec.USER_AGENT)) {
             continue;
         }
+        // -F writes its own multipart Content-Type, boundary and all.
+        if (form.len() > 0 && (low == "content-type" || low == "content-length")) {
+            continue;
+        }
         lines.push("-H " + quote("${k}: ${v}"));
     }
     if (cookie != "") {
         lines.push("-b " + quote(cookie));
     }
-    if (p.body.len() > 0) {
+    if (form.len() > 0) {
+        for x in form {
+            lines.push(form_option(x));
+        }
+    } else if (p.body.len() > 0) {
         match (from_utf8(p.body)) {
             Result.Ok(text) => lines.push("--data-raw " + quote(text)),
             Result.Err(_) => lines.push("--data-binary @body.bin"),

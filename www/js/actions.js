@@ -486,7 +486,7 @@ export async function fillFromCurl(tab, text) {
   const parsed = await call("curl.parse", { text });
   const d = tab.draft;
   const x = parsed.request;
-  for (const k of ["method", "url", "params", "headers", "body_type", "body", "form", "timeout_ms", "follow_redirects", "max_redirects"]) d[k] = x[k];
+  for (const k of ["method", "url", "params", "headers", "body_type", "body", "form", "parts", "timeout_ms", "follow_redirects", "max_redirects"]) d[k] = x[k];
   if (x.auth.kind !== "inherit") d.auth = x.auth;
   emit("tab", tab);
   emit("reload-editor");

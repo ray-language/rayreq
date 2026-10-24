@@ -159,7 +159,9 @@ fn migrations() -> [[string]] {
                 config TEXT NOT NULL
             )`,
             "CREATE UNIQUE INDEX oauth_tokens_owner ON oauth_tokens(environment_id, owner)"
-        ]
+        ],
+        // 6: multipart bodies (model.Part, JSON text).
+        ["ALTER TABLE requests ADD COLUMN parts TEXT NOT NULL DEFAULT '[]'"]
     ]
 }
 
@@ -516,7 +518,7 @@ pub fn delete_folder(s: Store, id: int) -> Result<int, string> {
 
 // ---- requests ------------------------------------------------------------------------------
 
-const REQUEST_COLS: string = "id, project_id, COALESCE(folder_id, 0), name, method, url, params, headers, body_type, body, form, timeout_ms, follow_redirects, max_redirects, position, created_at, updated_at, captures, auth, use_cookies";
+const REQUEST_COLS: string = "id, project_id, COALESCE(folder_id, 0), name, method, url, params, headers, body_type, body, form, timeout_ms, follow_redirects, max_redirects, position, created_at, updated_at, captures, auth, use_cookies, parts";
 
 fn request_of(row: [string]) -> model.Request {
     model.Request {
@@ -539,7 +541,8 @@ fn request_of(row: [string]) -> model.Request {
         updated_at: int_of(row[16]),
         captures: model.pairs_from_text(row[17]),
         auth: model.auth_from_text(row[18]),
-        use_cookies: row[19] != "0"
+        use_cookies: row[19] != "0",
+        parts: model.parts_from_text(row[20])
     }
 }
 
@@ -578,7 +581,7 @@ fn insert_request(s: Store, r: model.Request) -> Result<model.Request, string> {
     let now = to_string(time.now());
     exec(
         s,
-        "INSERT INTO requests (project_id, folder_id, name, method, url, params, headers, body_type, body, form, captures, auth, use_cookies, timeout_ms, follow_redirects, max_redirects, position, created_at, updated_at) VALUES (?, ${id_or_null(r.folder_id)}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO requests (project_id, folder_id, name, method, url, params, headers, body_type, body, form, captures, auth, use_cookies, timeout_ms, follow_redirects, max_redirects, position, created_at, updated_at, parts) VALUES (?, ${id_or_null(r.folder_id)}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             to_string(r.project_id),
             n,
@@ -597,7 +600,8 @@ fn insert_request(s: Store, r: model.Request) -> Result<model.Request, string> {
             to_string(r.max_redirects),
             to_string(pos),
             now,
-            now
+            now,
+            model.parts_text(r.parts)
         ]
     )?;
     get_request(s, last_id(s)?)
@@ -613,7 +617,7 @@ pub fn save_request(s: Store, r: model.Request) -> Result<model.Request, string>
     let n = clean_name(r.name, "request")?;
     let changed = exec(
         s,
-        "UPDATE requests SET name = ?, method = ?, url = ?, params = ?, headers = ?, body_type = ?, body = ?, form = ?, captures = ?, auth = ?, use_cookies = ?, timeout_ms = ?, follow_redirects = ?, max_redirects = ?, updated_at = ? WHERE id = ?",
+        "UPDATE requests SET name = ?, method = ?, url = ?, params = ?, headers = ?, body_type = ?, body = ?, form = ?, captures = ?, auth = ?, use_cookies = ?, timeout_ms = ?, follow_redirects = ?, max_redirects = ?, updated_at = ?, parts = ? WHERE id = ?",
         [
             n,
             r.method,
@@ -630,6 +634,7 @@ pub fn save_request(s: Store, r: model.Request) -> Result<model.Request, string>
             if (r.follow_redirects) { "1" } else { "0" },
             to_string(r.max_redirects),
             to_string(time.now()),
+            model.parts_text(r.parts),
             to_string(r.id)
         ]
     )?;

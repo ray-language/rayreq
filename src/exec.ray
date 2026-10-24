@@ -8,6 +8,7 @@ import std/time;
 import net/http;
 import cookies;
 import model;
+import multipart;
 import urls;
 
 pub const USER_AGENT: string = "rayreq/0.1.0";
@@ -96,7 +97,56 @@ fn content_type_of(body_type: string) -> string {
         "xml" => "application/xml",
         "text" => "text/plain; charset=utf-8",
         "form" => "application/x-www-form-urlencoded",
+        "multipart" => "multipart/form-data",
         _ => "",
+    }
+}
+
+/// A multipart body and the headers that announce it. A Content-Type written by hand keeps its
+/// boundary when it names one, and gets ours added when it does not.
+fn with_multipart(
+    headers: [(string, string)],
+    parts: [model.Part]
+) -> Result<([(string, string)], bytes), string> {
+    var given: Option<string> = Option.None;
+    var at = -1;
+    var i = 0;
+    while (i < headers.len()) {
+        if (headers[i].0.to_lower() == "content-type") {
+            at = i;
+            given = multipart.boundary_of(headers[i].1);
+        }
+        i = i + 1;
+    }
+    var tries = 0;
+    while (true) {
+        let boundary = match (given) {
+            Option.Some(b) => b,
+            Option.None => multipart.new_boundary(),
+        };
+        match (multipart.encode(parts, boundary)) {
+            Result.Ok(body) => {
+                var out = [] + headers;
+                if (at < 0) {
+                    out.push(("Content-Type", multipart.content_type(boundary)));
+                } else if (given.is_none()) {
+                    out[at] = (headers[at].0, headers[at].1 + "; boundary=" + boundary);
+                }
+                return Result.Ok((out, body));
+            },
+            Result.Err(e) => {
+                tries = tries + 1;
+                if (e != "boundary collision" || given.is_some() || tries > 5) {
+                    return Result.Err(
+                        if (e == "boundary collision") {
+                            "a part contains the boundary of the Content-Type header"
+                        } else {
+                            e
+                        }
+                    );
+                }
+            },
+        }
     }
 }
 
@@ -124,7 +174,7 @@ pub fn prepare(r: model.Request) -> Result<Prepared, string> {
         }
         headers.push((name, h.value.trim()));
     }
-    let body = match (r.body_type) {
+    var body = match (r.body_type) {
         "none" => b"",
         "form" => {
             var fields: [(string, string)] = [];
@@ -135,8 +185,14 @@ pub fn prepare(r: model.Request) -> Result<Prepared, string> {
             }
             urls.form_encode(fields).to_bytes()
         },
+        "multipart" => b"",
         _ => r.body.to_bytes(),
     };
+    if (r.body_type == "multipart") {
+        let (h, b) = with_multipart(headers, r.parts)?;
+        headers = h;
+        body = b;
+    }
     let names = lower_names(headers);
     let ctype = content_type_of(r.body_type);
     if (ctype != "" && !names.contains("content-type")) {

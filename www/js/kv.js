@@ -2,6 +2,7 @@
 // remove button per row, and always one blank row at the end to type a new one. Typing never
 // re-renders the rows (the focus stays put); set() does, for changes made from outside.
 
+import { getHost, hostCan } from "@raylang/elements";
 import { el } from "./util.js";
 import { t } from "./i18n.js";
 
@@ -92,6 +93,70 @@ export class KvEditor {
       box.style.visibility = "hidden";
     }
     line.append(box, key, value, remove);
+    return line;
+  }
+}
+
+/// The parts of a multipart body: a KvEditor whose rows are a text field or a file (its path,
+/// typed or chosen with the system dialog; `{{variables}}` work in it too), each with an
+/// optional content type.
+export class PartsEditor extends KvEditor {
+  constructor(container, options = {}) {
+    super(container, { keyLabel: "kv.field", ...options });
+  }
+
+  set(rows) {
+    this.rows = (rows || []).map((r) => ({
+      key: r.key, value: r.value, enabled: r.enabled !== false, file: Boolean(r.file), content_type: r.content_type || "",
+    }));
+    this.render();
+  }
+
+  addBlank() {
+    const blank = { key: "", value: "", enabled: true, file: false, content_type: "" };
+    this.rows.push(blank);
+    this.container.append(this.rowElement(blank, true));
+  }
+
+  rowElement(row, isBlank = false) {
+    const line = super.rowElement(row, isBlank);
+    line.classList.add("parts");
+    const [box, key, value, remove] = line.children;
+    const kind = el("ray-select", { size: "xs", "aria-label": t("parts.kind") });
+    kind.data = [{ value: "text", label: t("parts.text") }, { value: "file", label: t("parts.file") }];
+    kind.value = row.file ? "file" : "text";
+    const pick = el("ray-icon-button", { size: "sm", variant: "subtle", label: t("parts.choose") }, el("ray-icon", { name: "folder" }));
+    const ctype = el("ray-input", { size: "xs", placeholder: t("parts.type"), "aria-label": t("parts.type"), spellcheck: "false", autocapitalize: "off" });
+    ctype.value = row.content_type;
+    const showKind = () => {
+      value.placeholder = t(row.file ? "parts.path" : "kv.value");
+      value.setAttribute("aria-label", value.placeholder);
+      pick.hidden = !row.file || !hostCan("pick_files");
+    };
+    // Typing anything makes the blank row a real one: the base class watches key and value,
+    // so the other cells go through a value input event.
+    const touched = () => value.dispatchEvent(new Event("input"));
+    kind.addEventListener("change", () => {
+      row.file = kind.value === "file";
+      showKind();
+      this.changed();
+    });
+    ctype.addEventListener("input", () => {
+      row.content_type = ctype.value;
+      this.changed();
+    });
+    pick.addEventListener("click", async () => {
+      const files = await getHost().pickFiles({ title: t("parts.choose") });
+      if (!files.length) return;
+      value.value = files[0].path;
+      touched();
+    });
+    ctype.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") e.preventDefault();
+    });
+    const cell = el("div", { class: "part-value" }, value, pick);
+    showKind();
+    line.replaceChildren(box, key, kind, cell, ctype, remove);
     return line;
   }
 }

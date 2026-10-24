@@ -1,0 +1,160 @@
+//! multipart/form-data bodies (RFC 7578): text fields and files, the files read from disk when
+//! the request is prepared (so a send always carries the file as it is now).
+//!
+//! Names and file names are quoted the way browsers do (WHATWG HTML, "multipart/form-data
+//! encoding algorithm"): `"` becomes `%22` and line breaks `%0D`/`%0A`, so no name can break
+//! out of its header line.
+
+import std/collections/bytesbuilder;
+import std/crypto;
+import std/fs;
+import std/hex;
+import model;
+
+/// The largest file a part may carry: the body is built in memory.
+pub const MAX_FILE: int = 100 * 1024 * 1024;
+
+pub fn new_boundary() -> string {
+    "----RayReqFormBoundary" + hex.hex_encode(crypto.random_bytes(12))
+}
+
+pub fn content_type(boundary: string) -> string {
+    "multipart/form-data; boundary=${boundary}"
+}
+
+/// The boundary a Content-Type header names, if it names one.
+pub fn boundary_of(header_value: string) -> Option<string> {
+    for param in header_value.split(";") {
+        let p = param.trim();
+        if (p.to_lower().starts_with("boundary=")) {
+            let b = p.substring(9, p.len()).trim();
+            let unquoted = if (b.starts_with("\"") && b.ends_with("\"") && b.len() >= 2) {
+                b.substring(1, b.len() - 1)
+            } else {
+                b
+            };
+            if (unquoted != "") {
+                return Option.Some(unquoted);
+            }
+        }
+    }
+    Option.None
+}
+
+/// A name inside `name="…"` / `filename="…"`.
+pub fn quote_name(s: string) -> string {
+    s.replace("\"", "%22").replace("\r", "%0D").replace("\n", "%0A")
+}
+
+pub fn base_name(path: string) -> string {
+    let p = path.replace("\\", "/");
+    match (p.last_index_of("/")) {
+        Option.Some(i) => p.substring(i + 1, p.len()),
+        Option.None => p,
+    }
+}
+
+const TYPES: [(string, string)] = [
+    ("txt", "text/plain"),
+    ("csv", "text/csv"),
+    ("html", "text/html"),
+    ("htm", "text/html"),
+    ("css", "text/css"),
+    ("js", "text/javascript"),
+    ("json", "application/json"),
+    ("xml", "application/xml"),
+    ("pdf", "application/pdf"),
+    ("zip", "application/zip"),
+    ("gz", "application/gzip"),
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("svg", "image/svg+xml"),
+    ("ico", "image/x-icon"),
+    ("mp3", "audio/mpeg"),
+    ("wav", "audio/wav"),
+    ("mp4", "video/mp4"),
+    ("webm", "video/webm")
+];
+
+/// The media type of a file by its extension; application/octet-stream when unknown.
+pub fn type_for(file_name: string) -> string {
+    let ext = match (file_name.last_index_of(".")) {
+        Option.Some(i) => file_name.substring(i + 1, file_name.len()).to_lower(),
+        Option.None => return "application/octet-stream",
+    };
+    for (e, t) in TYPES {
+        if (e == ext) {
+            return t;
+        }
+    }
+    "application/octet-stream"
+}
+
+fn line_free(what: string, s: string) -> Result<string, string> {
+    if (s.contains("\r") || s.contains("\n")) {
+        return Result.Err("the ${what} contains a line break");
+    }
+    Result.Ok(s.trim())
+}
+
+/// A file's content, or why it cannot be sent.
+pub fn read_part_file(path: string) -> Result<bytes, string> {
+    let p = path.trim();
+    if (p == "") {
+        return Result.Err("a file part has no file chosen");
+    }
+    if (!fs.exists(p)) {
+        return Result.Err("file not found: ${p}");
+    }
+    if (fs.is_dir(p)) {
+        return Result.Err("${p} is a folder, not a file");
+    }
+    // stat does not follow a symlink: its size is the link's, so that one is checked after.
+    let st = fs.stat(p)?;
+    if (st.kind == "file" && st.size > MAX_FILE) {
+        return Result.Err("${p} is too large to send (100 MB at most)");
+    }
+    let data = fs.read_file_bytes(p)?;
+    if (data.len() > MAX_FILE) {
+        return Result.Err("${p} is too large to send (100 MB at most)");
+    }
+    Result.Ok(data)
+}
+
+/// The body for the enabled parts that have a name. Err when a file cannot be read, or when the
+/// boundary turns up in the data (pick another and encode again).
+pub fn encode(parts: [model.Part], boundary: string) -> Result<bytes, string> {
+    let marker = ("--" + boundary).to_bytes();
+    var b = bytesbuilder.new();
+    for p in parts {
+        if (!p.enabled || p.key.trim() == "") {
+            continue;
+        }
+        let name = quote_name(p.key.trim());
+        let given = line_free("content type of part '${p.key}'", p.content_type)?;
+        var head = "--${boundary}\r\nContent-Disposition: form-data; name=\"${name}\"";
+        let data = if (p.file) {
+            let file = base_name(p.value.trim());
+            head = head
+                + "; filename=\"${quote_name(file)}\"\r\nContent-Type: "
+                + if (given == "") { type_for(file) } else { given };
+            read_part_file(p.value)?
+        } else {
+            if (given != "") {
+                head = head + "\r\nContent-Type: ${given}";
+            }
+            p.value.to_bytes()
+        };
+        if (data.index_of(marker).is_some()) {
+            return Result.Err("boundary collision");
+        }
+        bytesbuilder.push(b, (head + "\r\n\r\n").to_bytes());
+        bytesbuilder.push(b, data);
+        bytesbuilder.push(b, b"\r\n");
+    }
+    bytesbuilder.push(b, "--${boundary}--\r\n".to_bytes());
+    Result.Ok(bytesbuilder.build(b))
+}

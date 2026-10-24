@@ -635,7 +635,10 @@ fn body_v3(cx: Ctx, r: model.Request, label: string, rb: Node) {
             r.body = text_example(example);
             r.headers.push(model.Pair { key: "Content-Type", value: mt, enabled: true });
         },
-        "multipart" => warn(cx, "${label}: multipart bodies are not supported yet; imported without its body"),
+        "multipart" => {
+            r.body_type = "multipart";
+            r.parts = multipart_parts(cx, schema, media);
+        },
         _ => warn(cx, "${label}: ${mt} bodies cannot be imported; imported without its body"),
     }
 }
@@ -666,6 +669,60 @@ fn form_fields(cx: Ctx, schema: Node, example: Option<Node>) -> [model.Pair] {
             Option.None => "",
         };
         out.push(model.Pair { key: k, value: value, enabled: required.contains(k) });
+    }
+    out
+}
+
+/// Whether a schema describes a file's content (OpenAPI 3.0 `format: binary`/`base64`, 3.1
+/// `contentMediaType`/`contentEncoding`).
+fn is_file_schema(s: Node) -> bool {
+    let format = node.str_at(s, "format");
+    format == "binary"
+        || format == "base64"
+        || node.has(s, "contentMediaType")
+        || node.has(s, "contentEncoding")
+}
+
+/// The parts of a multipart body: a file part (no file chosen yet) for each file property, a
+/// text part for the others; the `encoding` object may name a part's content type.
+fn multipart_parts(cx: Ctx, schema: Node, media: Node) -> [model.Part] {
+    let required = node.items_at(schema, "required")
+        .map(fn(n: Node) -> string { node.text(n).unwrap_or("") });
+    var out: [model.Part] = [];
+    for (k, raw) in properties_of(cx, schema) {
+        let prop = deref(cx, raw);
+        if (node.bool_at(prop, "readOnly")) {
+            continue;
+        }
+        // An array of files is one part per file: one row to start with.
+        let item = if (type_of(prop) == "array") {
+            deref(cx, node.get(prop, "items").unwrap_or(Node.Obj([])))
+        } else {
+            prop
+        };
+        let file = is_file_schema(item);
+        let declared = node.str_at(
+            node.get(node.get(media, "encoding").unwrap_or(Node.Null), k).unwrap_or(Node.Null),
+            "contentType"
+        );
+        let ctype = if (declared.contains(",") || declared.contains("*")) { "" } else { declared };
+        let value = if (file) {
+            ""
+        } else {
+            match (schema_value(prop)) {
+                Option.Some(v) => value_text(v),
+                Option.None => "",
+            }
+        };
+        out.push(
+            model.Part {
+                key: k,
+                value: value,
+                enabled: required.contains(k) || file,
+                file: file,
+                content_type: ctype
+            }
+        );
     }
     out
 }
@@ -706,19 +763,39 @@ fn body_v2(cx: Ctx, r: model.Request, label: string, op: Node, params: [Node]) {
         }
     }
     var fields: [model.Pair] = [];
+    var parts: [model.Part] = [];
     var files = false;
     for p in params {
         if (node.str_at(p, "in") != "formData") {
             continue;
         }
+        let required = node.bool_at(p, "required");
         if (node.str_at(p, "type") == "file") {
             files = true;
+            parts.push(
+                model.Part {
+                    key: node.str_at(p, "name"),
+                    value: "",
+                    enabled: true,
+                    file: true,
+                    content_type: ""
+                }
+            );
             continue;
         }
         let value = match (explicit_value(cx, p)) {
             Option.Some(v) => value_text(v),
             Option.None => "",
         };
+        parts.push(
+            model.Part {
+                key: node.str_at(p, "name"),
+                value: value,
+                enabled: required,
+                file: false,
+                content_type: ""
+            }
+        );
         fields.push(
             model.Pair {
                 key: node.str_at(p, "name"),
@@ -727,13 +804,12 @@ fn body_v2(cx: Ctx, r: model.Request, label: string, op: Node, params: [Node]) {
             }
         );
     }
-    if (files) {
-        warn(
-            cx,
-            "${label}: file uploads (multipart) are not supported yet; the file fields are left out"
-        );
-    }
-    if (fields.len() > 0) {
+    let multipart_only = consumes.len() > 0
+        && consumes.filter(fn(c: string) -> bool { body_kind(c) == "multipart" }).len() == consumes.len();
+    if (files || multipart_only) {
+        r.body_type = "multipart";
+        r.parts = parts;
+    } else if (fields.len() > 0) {
         r.body_type = "form";
         r.form = fields;
     }

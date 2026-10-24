@@ -29,7 +29,7 @@ async function until(cond, what, ms = 8000) {
   }
 }
 
-export async function run(port) {
+export async function run(port, sampleFile) {
   const base = `http://127.0.0.1:${port}`;
   try {
     // A project and a request, through the same actions the UI uses.
@@ -368,6 +368,40 @@ export async function run(port) {
     await A.send(tab4);
     expect(tab4.response.text.includes('"auth":"Bearer ac-token"'), `OAuth code flow: ${tab4.response.text || tab4.response.error}`);
     await A.closeTab(tab4.id);
+    A.activate(tab.id);
+
+    // Multipart: a text part and a file part through the parts editor, sent and seen raw.
+    const mpReq = await call("requests.create", { project_id: state.project.id, folder_id: 0, name: "Upload" });
+    await A.openRequest(mpReq.id);
+    const tab5 = activeTab();
+    type($("url"), `${base}/raw`);
+    $("body-type").value = "multipart";
+    $("body-type").dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await until(() => !$("parts").hidden, "the parts editor shows");
+    const rowsOf = () => [...$("parts").querySelectorAll(".kv-row")];
+    const typeIn = (row, i, v) => type(row.querySelectorAll("ray-input")[i], v);
+    typeIn(rowsOf()[0], 0, "title");
+    typeIn(rowsOf()[0], 1, "Hi {{base}}");
+    const fileRow = rowsOf()[1];
+    typeIn(fileRow, 0, "doc");
+    const kindSelect = fileRow.querySelector("ray-select");
+    kindSelect.value = "file";
+    kindSelect.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    typeIn(fileRow, 1, sampleFile);
+    expect(tab5.draft.method === "GET" && tab5.draft.parts.length === 2 && tab5.draft.parts[1].file, `parts: ${JSON.stringify(tab5.draft.parts)}`);
+    $("method").value = "POST";
+    $("method").dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await A.send(tab5);
+    const raw = tab5.response.text || tab5.response.error;
+    expect(tab5.response.ok && raw.startsWith("multipart/form-data; boundary=") && raw.includes(`name="title"\r\n\r\nHi ${base}\r\n`)
+      && raw.includes('name="doc"; filename="sample.txt"\r\nContent-Type: text/plain\r\n\r\nsample ñ\n'), `multipart sent: ${raw}`);
+    // Out as curl -F, back in as the same parts.
+    const mpCurl = await call("curl.export", { request: tab5.draft });
+    expect(mpCurl.command.includes(`-F 'doc=@"${sampleFile}";type=text/plain'`), `multipart curl: ${mpCurl.command}`);
+    const mpBack = await call("curl.parse", { text: mpCurl.command });
+    expect(mpBack.request.body_type === "multipart" && mpBack.request.parts[1].value === sampleFile, `curl back: ${JSON.stringify(mpBack.request.parts)}`);
+    await A.save(tab5);
+    await A.closeTab(tab5.id);
     A.activate(tab.id);
 
     // Spanish and back.

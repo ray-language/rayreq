@@ -242,6 +242,23 @@ pub fn resolve_request(r: model.Request, vars: [Var]) -> (model.Request, [string
         let (form, m_form) = expand_pairs(r.form, values);
         out.form = form;
         missing = add_missing(missing, m_form);
+    } else if (r.body_type == "multipart") {
+        // Names, values and file paths alike (`{{dir}}/photo.png`).
+        var parts: [model.Part] = [];
+        for p in r.parts {
+            if (!p.enabled) {
+                parts.push(p);
+                continue;
+            }
+            let (k, mk) = expand(p.key, values);
+            let (v, mv) = expand(p.value, values);
+            let (c, mc) = expand(p.content_type, values);
+            parts.push(
+                model.Part { key: k, value: v, enabled: true, file: p.file, content_type: c }
+            );
+            missing = add_missing(missing, add_missing(mk, add_missing(mv, mc)));
+        }
+        out.parts = parts;
     } else if (r.body_type != "none") {
         let (body, m_body) = expand(r.body, values);
         out.body = body;

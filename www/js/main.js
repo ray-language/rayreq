@@ -214,7 +214,7 @@ boot().catch((e) => {
 const checkPort = new URLSearchParams(location.search).get("check");
 if (checkPort) {
   window.addEventListener("rayreq:ready", () => {
-    import("./check.js").then((m) => m.run(Number(checkPort))).catch((e) => window.ray.send(`check:fail:${e.message}`));
+    import("./check.js").then((m) => m.run(Number(checkPort), new URLSearchParams(location.search).get("file"))).catch((e) => window.ray.send(`check:fail:${e.message}`));
   }, { once: true });
 }
 

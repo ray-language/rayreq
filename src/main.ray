@@ -223,7 +223,7 @@ fn run(check: bool) -> Result<int, string> {
 
     var url = page_url()?;
     if (check) {
-        url = url + "?check=" + to_string(selfcheck.start_server()?);
+        url = url + "?check=" + to_string(selfcheck.start_server()?) + selfcheck.sample_query()?;
     }
     var o = ui.options(1280, 820);
     o.min_width = 860;
@@ -359,10 +359,10 @@ fn run(check: bool) -> Result<int, string> {
                             });
                         } else {
                             if let Result.Err(err) = open_browser(login.url) {
-                            close(login.listener);
-                            reply(target, id, api.fail("cannot open the browser: ${err}"));
-                            continue;
-                        }
+                                close(login.listener);
+                                reply(target, id, api.fail("cannot open the browser: ${err}"));
+                                continue;
+                            }
                         }
                         let cancel: Channel<bool> = Channel.bounded(1);
                         logins.insert(job.run, cancel);

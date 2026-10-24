@@ -1,0 +1,298 @@
+// multipart/form-data: the bytes of the body, the Content-Type that announces it, cURL in and
+// out, and the same parts seen by a server whether rayreq or the real curl sends them.
+
+import std/fs;
+import std/json;
+import std/net;
+import std/process;
+import net/webserver;
+import api;
+import curl;
+import exec;
+import model;
+import multipart;
+import store;
+import vars;
+
+fn text_part(k: string, v: string) -> model.Part {
+    model.Part { key: k, value: v, enabled: true, file: false, content_type: "" }
+}
+
+fn file_part(k: string, path: string) -> model.Part {
+    model.Part { key: k, value: path, enabled: true, file: true, content_type: "" }
+}
+
+fn temp_file(name: string, content: string) -> string {
+    let dir = fs.make_temp_dir("rayreq-mp").unwrap();
+    let path = dir + "/" + name;
+    fs.write_file(path, content).unwrap();
+    path
+}
+
+fn err_of<T>(r: Result<T, string>) -> string {
+    match (r) {
+        Result.Ok(_) => "",
+        Result.Err(e) => e,
+    }
+}
+
+@test
+fn the_body_is_rfc_7578() {
+    let path = temp_file("notes.txt", "line 1\nline 2");
+    var typed = text_part("meta", "{\"a\":1}");
+    typed.content_type = "application/json";
+    var off = text_part("off", "x");
+    off.enabled = false;
+    let body = multipart.encode([text_part("title", "Hello ñ"), typed, file_part("doc", path), off, text_part("", "nameless")], "B0UND")
+        .unwrap();
+    assert_eq(
+        from_utf8(body).unwrap(),
+        "--B0UND\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nHello ñ\r\n"
+            + "--B0UND\r\nContent-Disposition: form-data; name=\"meta\"\r\nContent-Type: application/json\r\n\r\n{\"a\":1}\r\n"
+            + "--B0UND\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\nline 1\nline 2\r\n"
+            + "--B0UND--\r\n"
+    );
+    // Nothing to send is still a well-formed body.
+    assert_eq(from_utf8(multipart.encode([], "B").unwrap()).unwrap(), "--B--\r\n");
+}
+
+@test
+fn names_cannot_break_their_header_line() {
+    assert_eq(multipart.quote_name("a\"b\r\nc"), "a%22b%0D%0Ac");
+    let body = from_utf8(multipart.encode([text_part("x\"\nContent-Type: evil", "v")], "B")
+        .unwrap()).unwrap();
+    assert(body.contains("name=\"x%22%0AContent-Type: evil\"\r\n\r\nv"));
+    var bad = text_part("k", "v");
+    bad.content_type = "text/plain\r\nX-Evil: 1";
+    assert(err_of(multipart.encode([bad], "B")).contains("line break"));
+}
+
+@test
+fn file_parts_need_a_readable_file() {
+    assert(err_of(multipart.encode([file_part("f", "")], "B")).contains("no file chosen"));
+    assert(
+        err_of(multipart.encode([file_part("f", "/nope/missing.bin")], "B")).contains(
+            "file not found: /nope/missing.bin"
+        )
+    );
+    let dir = fs.make_temp_dir("rayreq-mp").unwrap();
+    assert(err_of(multipart.encode([file_part("f", dir)], "B")).contains("is a folder"));
+    // A part whose data holds the boundary is refused (another boundary is picked).
+    assert_eq(err_of(multipart.encode([text_part("a", "x--B y")], "B")), "boundary collision");
+}
+
+@test
+fn helpers() {
+    assert_eq(multipart.type_for("Photo.JPG"), "image/jpeg");
+    assert_eq(multipart.type_for("data.bin"), "application/octet-stream");
+    assert_eq(multipart.type_for("README"), "application/octet-stream");
+    assert_eq(multipart.base_name("C:\\Users\\ana\\cv.pdf"), "cv.pdf");
+    assert_eq(
+        multipart.boundary_of("multipart/form-data; charset=utf-8; boundary=\"abc\""),
+        Option.Some("abc")
+    );
+    assert(multipart.boundary_of("multipart/form-data").is_none());
+    let b = multipart.new_boundary();
+    assert(
+        b.starts_with("----RayReqFormBoundary") && b.len() == 46 && b != multipart.new_boundary()
+    );
+}
+
+fn multipart_request(parts: [model.Part]) -> model.Request {
+    var r = model.new_request(0, 0, "up");
+    r.method = "POST";
+    r.url = "http://h/upload";
+    r.body_type = "multipart";
+    r.parts = parts;
+    r
+}
+
+fn header(p: exec.Prepared, name: string) -> string {
+    exec.header_value(p.headers, name).unwrap_or("<none>")
+}
+
+@test
+fn the_content_type_names_the_boundary() {
+    let p = exec.prepare(multipart_request([text_part("a", "1")])).unwrap();
+    let ct = header(p, "content-type");
+    let b = multipart.boundary_of(ct).unwrap();
+    assert(ct.starts_with("multipart/form-data; boundary=----RayReqFormBoundary"));
+    assert(from_utf8(p.body).unwrap().starts_with("--${b}\r\n"));
+    // A Content-Type written by hand: its boundary is used, or ours is added to it.
+    var own = multipart_request([text_part("a", "1")]);
+    own.headers = [
+        model.Pair {
+            key: "Content-Type",
+            value: "multipart/form-data; boundary=mine",
+            enabled: true
+        }
+    ];
+    let po = exec.prepare(own).unwrap();
+    assert(from_utf8(po.body).unwrap().starts_with("--mine\r\n"));
+    assert_eq(header(po, "content-type"), "multipart/form-data; boundary=mine");
+    var bare = multipart_request([text_part("a", "1")]);
+    bare.headers = [model.Pair { key: "content-type", value: "multipart/mixed", enabled: true }];
+    let pb = exec.prepare(bare).unwrap();
+    assert(
+        header(pb, "content-type").starts_with("multipart/mixed; boundary=----RayReqFormBoundary")
+    );
+    // A hand boundary that turns up in the data cannot be swapped: an error, not a broken body.
+    var clash = multipart_request([text_part("a", "--mine")]);
+    clash.headers = own.headers;
+    assert(err_of(exec.prepare(clash)).contains("boundary"));
+    assert(
+        err_of(exec.prepare(multipart_request([file_part("f", "/nope/x")]))).contains(
+            "file not found"
+        )
+    );
+}
+
+@test
+fn variables_reach_names_values_and_paths() {
+    let path = temp_file("v.txt", "v");
+    let dir = path.substring(0, path.len() - 6);
+    var off = text_part("{{off}}", "{{off}}");
+    off.enabled = false;
+    let r = multipart_request(
+        [text_part("{{field}}", "hi {{who}}"), file_part("f", "{{dir}}/v.txt"), off]
+    );
+    let vs = [
+        vars.Var { key: "field", value: "greeting", kind: "environment", source: "E" },
+        vars.Var { key: "who", value: "Ana", kind: "environment", source: "E" },
+        vars.Var { key: "dir", value: dir, kind: "environment", source: "E" }
+    ];
+    let (out, missing) = vars.resolve_request(r, vs);
+    assert_eq(missing.len(), 0);
+    assert_eq(
+        (out.parts[0].key, out.parts[0].value, out.parts[1].value),
+        ("greeting", "hi Ana", path)
+    );
+    // A disabled part is not sent, so its variables are not reported.
+    assert_eq(out.parts[2].key, "{{off}}");
+    assert_eq(r.parts[0].key, "{{field}}");
+}
+
+@test
+fn curl_form_options_in() {
+    let i = curl.parse("curl https://h/up -F title=Hi -F 'photo=@/tmp/a b.png;type=image/png' -F 'q=\"semi;colon\";type=text/x' --form-string 'lit=@not-a-file' -F 'doc=<notes.txt' -F 'f=@x.bin;filename=other.bin'")
+        .unwrap();
+    let r = i.request;
+    assert_eq((r.method, r.body_type), ("POST", "multipart"));
+    assert_eq(
+        r.parts.map(fn(x: model.Part) -> string { "${x.key}|${x.value}|${x.file}|${x.content_type}" }),
+        [
+            "title|Hi|false|",
+            "photo|/tmp/a b.png|true|image/png",
+            "q|semi;colon|false|text/x",
+            "lit|@not-a-file|false|",
+            "doc|notes.txt|true|",
+            "f|x.bin|true|"
+        ]
+    );
+    assert_eq(i.warnings.len(), 2);
+    assert(i.warnings[0].contains("text of the file notes.txt"));
+    assert(i.warnings[1].contains("other.bin"));
+    // -F with -d: curl refuses it; the form is kept.
+    let both = curl.parse("curl https://h/ -d a=1 -F b=2").unwrap();
+    assert_eq(both.request.body_type, "multipart");
+    assert(both.warnings[0].contains("-d and -F"));
+}
+
+// ---- rayreq and curl, seen by the same server ----------------------------------------------
+
+/// The parts of a multipart body as "name|filename|type|data" lines (a minimal parser).
+fn parts_seen(req: webserver.Request) -> string {
+    let ct = req.headers.get_or("content-type", "");
+    let b = match (multipart.boundary_of(ct)) {
+        Option.Some(b) => b,
+        Option.None => return "no boundary in '${ct}'",
+    };
+    let text = from_utf8(req.body).unwrap_or("<binary>");
+    var out: [string] = [];
+    for chunk in text.split("--" + b) {
+        if (!chunk.starts_with("\r\n")) {
+            continue;
+        }
+        let body = chunk.substring(2, chunk.len());
+        let sep = match (body.index_of("\r\n\r\n")) {
+            Option.Some(i) => i,
+            Option.None => continue,
+        };
+        let head = body.substring(0, sep);
+        var data = body.substring(sep + 4, body.len());
+        data = data.strip_suffix("\r\n").unwrap_or(data);
+        var name = "";
+        var file = "";
+        var ctype = "";
+        for line in head.split("\r\n") {
+            let low = line.to_lower();
+            if (low.starts_with("content-disposition:")) {
+                for attr in line.split(";") {
+                    let a = attr.trim();
+                    if (a.starts_with("name=")) {
+                        name = a.substring(6, a.len() - 1);
+                    } else if (a.starts_with("filename=")) {
+                        file = a.substring(10, a.len() - 1);
+                    }
+                }
+            } else if (low.starts_with("content-type:")) {
+                ctype = line.substring(13, line.len()).trim();
+            }
+        }
+        out.push("${name}|${file}|${ctype}|${data}");
+    }
+    out.join("\n")
+}
+
+fn site(req: webserver.Request) -> webserver.Response {
+    webserver.text(200, parts_seen(req))
+}
+
+fn start() -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    let _t = spawn(fn() {
+        let _ = webserver.serve_options_on(l, webserver.options()
+            .quiet(), fn() -> fn(webserver.Request) -> webserver.Response { site });
+    });
+    port
+}
+
+@test
+fn rayreq_and_curl_send_the_same_parts() {
+    let port = start();
+    let path = temp_file("it's a \"file\".txt", "file body ñ");
+    var typed = text_part("json", "{\"x\": \"y;z\"}");
+    typed.content_type = "application/json";
+    var r = multipart_request([text_part("plain", "a=b; @c <d"), typed, file_part("upload", path)]);
+    r.url = "http://127.0.0.1:${port}/up";
+    let p = exec.prepare(r).unwrap();
+    let o = exec.run(p);
+    let ours = from_utf8(o.body).unwrap();
+    assert_eq(
+        ours,
+        "plain|||a=b; @c <d\njson||application/json|{\"x\": \"y;z\"}\nupload|it's a %22file%22.txt|text/plain|file body ñ"
+    );
+    // The exported command, run by bash and the real curl.
+    let cmd = curl.command(p, "", r.parts);
+    let out = process.run("bash", ["-c", cmd + " -s"]).unwrap();
+    let theirs = from_utf8(out.stdout).unwrap();
+    assert_eq_msg(theirs, ours, cmd);
+}
+
+@test
+fn a_multipart_request_is_stored_and_exported() {
+    let dir = fs.make_temp_dir("rayreq-mp").unwrap();
+    let s = store.open(dir + "/rayreq.db").unwrap();
+    let p = store.create_project(s, "P", "").unwrap();
+    var r = multipart_request([text_part("a", "1"), file_part("f", "/tmp/x.png")]);
+    r.project_id = p.id;
+    let saved = store.create_request(s, r).unwrap();
+    let back = store.get_request(s, saved.id).unwrap();
+    assert_eq(
+        (back.body_type, back.parts.len(), back.parts[1].file, back.parts[1].value),
+        ("multipart", 2, true, "/tmp/x.png")
+    );
+    let j = model.request_of(model.request_json(back)).unwrap();
+    assert_eq(j.parts[1].file, true);
+}

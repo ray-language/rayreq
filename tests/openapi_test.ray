@@ -131,7 +131,15 @@ paths:
       requestBody:
         content:
           multipart/form-data:
-            schema: {type: object}
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: {type: string, example: Holiday}
+                photo: {type: string, format: binary}
+                note: {type: string}
+            encoding:
+              photo: {contentType: image/png}
     trace:
       summary: trace it
   /health:
@@ -264,7 +272,12 @@ fn a_form_body_and_what_is_left_out() {
     let d = find(i, "DELETE", "{{baseUrl}}/orders/{{orderId}}");
     assert_eq((d.auth.kind, d.auth.token), ("bearer", "{{accessToken}}"));
     assert(has_warning(i, "OAuth 2"));
-    assert(has_warning(i, "POST /upload: multipart"));
+    let up = find(i, "POST", "{{baseUrl}}/upload");
+    assert_eq(up.body_type, "multipart");
+    assert_eq(
+        up.parts.map(fn(x: model.Part) -> string { "${x.key}=${x.value} ${x.file} ${x.enabled} ${x.content_type}" }),
+        ["title=Holiday false true ", "photo= true true image/png", "note= false false "]
+    );
     assert(has_warning(i, "TRACE /upload"));
     assert(has_warning(i, "servers given for single paths"));
     assert(has_warning(i, "names 2 servers"));
@@ -311,8 +324,12 @@ fn swagger_2() {
     assert_eq((put.auth.kind, put.auth.username), ("basic", "{{username}}"));
     assert_eq(put.body, "{\n  \"name\": \"string\",\n  \"age\": 0\n}");
     let post = find(i, "POST", "{{baseUrl}}/avatars");
-    assert_eq((post.body_type, pair_text(post.form)), ("form", ["name=me"]));
-    assert(has_warning(i, "POST /avatars: file uploads"));
+    assert_eq(post.body_type, "multipart");
+    assert_eq(
+        post.parts.map(fn(x: model.Part) -> string { "${x.key}=${x.value} ${x.file} ${x.enabled}" }),
+        ["name=me false true", "file= true true"]
+    );
+    assert(!has_warning(i, "/avatars"));
     // No tags: grouped by path.
     assert_eq(i.groups.map(fn(g: openapi.Group) -> string { g.name }), ["users", "avatars"]);
 }

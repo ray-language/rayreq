@@ -27,7 +27,7 @@ export function emit(name, detail) {
   bus.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-const EDITABLE = ["name", "method", "url", "params", "headers", "body_type", "body", "form", "captures", "auth", "use_cookies", "timeout_ms", "follow_redirects", "max_redirects"];
+const EDITABLE = ["name", "method", "url", "params", "headers", "body_type", "body", "form", "parts", "captures", "auth", "use_cookies", "timeout_ms", "follow_redirects", "max_redirects"];
 const TABLES = ["params", "headers", "form", "captures"];
 
 function cleanPairs(ps) {
@@ -50,6 +50,8 @@ export function canonical(r) {
   for (const k of EDITABLE) {
     if (TABLES.includes(k)) out[k] = cleanPairs(r[k]);
     else if (k === "auth") out[k] = canonicalAuth(r.auth);
+    else if (k === "parts") out[k] = (r.parts || []).filter((p) => p.key !== "" || p.value !== "")
+      .map((p) => [p.key, p.value, p.enabled !== false, Boolean(p.file), p.content_type || ""]);
     else out[k] = r[k];
   }
   return JSON.stringify(out);

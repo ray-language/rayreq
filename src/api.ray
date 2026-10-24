@@ -729,7 +729,16 @@ fn curl_export(s: store.Store, r: model.Request) -> Result<json.Json, string> {
     Result.Ok(
         jsonv.obj(
             [
-                ("command", jsonv.str(curl.command(prepared, cookie))),
+                (
+                    "command",
+                    jsonv.str(
+                        curl.command(
+                            prepared,
+                            cookie,
+                            if (p.request.body_type == "multipart") { p.request.parts } else { [] }
+                        )
+                    )
+                ),
                 ("missing", jsonv.strs(p.missing))
             ]
         )
@@ -895,6 +904,7 @@ fn dispatch(s: store.Store, req: json.Json, op: string) -> Result<Action, string
                 r.body_type = d.body_type;
                 r.body = d.body;
                 r.form = d.form;
+                r.parts = d.parts;
                 r.captures = d.captures;
                 r.auth = d.auth;
                 r.use_cookies = d.use_cookies;

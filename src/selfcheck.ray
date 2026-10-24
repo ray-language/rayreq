@@ -2,6 +2,7 @@
 //! run (www/check.js). The page reports with `window.ray.send("check:ok")` or
 //! `"check:fail:<why>"`; a watchdog ends the run if it never does.
 
+import std/fs;
 import std/json;
 import std/net;
 import std/time;
@@ -70,6 +71,11 @@ fn echo(req: webserver.Request) -> webserver.Response {
             "{\"access_token\":\"${access}\",\"token_type\":\"Bearer\",\"expires_in\":3600}"
         );
     }
+    if (req.path == "/raw") {
+        // The body as it came, with its Content-Type first (multipart checks read it).
+        let ct = req.headers.get_or("content-type", "");
+        return webserver.text(200, ct + "\n\n" + from_utf8(req.body).unwrap_or("<binary>"));
+    }
     if (req.path == "/missing") {
         return webserver.text(404, "no such thing");
     }
@@ -101,6 +107,14 @@ pub fn start_server() -> Result<int, string> {
         exit(1);
     });
     Result.Ok(port)
+}
+
+/// A small file for the multipart check to upload, as the page's `&file=<path>` parameter.
+pub fn sample_query() -> Result<string, string> {
+    let dir = fs.make_temp_dir("rayreq-check-file")?;
+    let path = dir + "/sample.txt";
+    fs.write_file(path, "sample ñ\n")?;
+    Result.Ok("&file=" + url.url_encode(path))
 }
 
 /// The exit code a page message stands for, or None when it is not a verdict.

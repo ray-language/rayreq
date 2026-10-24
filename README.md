@@ -6,7 +6,7 @@ folders, saved requests, a response viewer and per-request history. Its model is
 
 ```sh
 make run        # open the app
-make test       # 155 tests: URLs, sending, the store, variables, auth, cookies, cURL, OpenAPI…
+make test       # 164 tests: URLs, sending, the store, variables, auth, cookies, cURL, OpenAPI…
 make check      # the real page driven through a send against a local server
 make            # every target
 ```
@@ -16,8 +16,14 @@ make            # every target
 - **Projects** with **nested folders** and **requests**: create, rename, duplicate, move (drag
   and drop or "Move to…"), delete; a filter and a command palette (⌘K) to find them.
 - **Request builder**: method, URL, a params table kept in sync with the URL's query (disabled
-  rows are kept and not sent), headers, body (JSON, text, XML, form-urlencoded) with JSON
+  rows are kept and not sent), headers, body (JSON, text, XML, form-urlencoded, multipart) with JSON
   validation and formatting, and per-request settings (timeout, redirects).
+- **Multipart bodies** (multipart/form-data, RFC 7578): text parts and file parts — a path
+  typed or chosen with the system dialog, `{{variables}}` included — each with an optional
+  content type (a file's is guessed from its name otherwise). Files are read when the request
+  is sent, up to 100 MB each. cURL's `-F`/`--form-string` come in as parts and go out as them
+  (checked against the real curl: a server sees the same parts from both), and OpenAPI file
+  fields become file parts.
 - **Several requests open in tabs**, with an unsaved mark per tab and on the window; closing a
   tab or quitting with changes asks first.
 - **Sending** never blocks the window (each send runs in a fiber of its own) and can be
@@ -62,7 +68,7 @@ make            # every target
   `$'…'` quoting included — into a new request; pasting one into the URL field fills the open
   request. Method, headers, body (JSON, XML, text or form, by its Content-Type), `-u` and
   `--oauth2-bearer` as auth, `-G`, `-L`, `--max-time` and cookies are kept; whatever cannot be
-  (files, `-F` multipart, `-k`, unknown options) is listed. Copy as cURL (⇧⌘C, or the terminal
+  (`-d @file`, `-k`, unknown options) is listed. Copy as cURL (⇧⌘C, or the terminal
   button by the URL) writes what the send would do: variables resolved, auth applied, the jar's
   cookies.
 - **OpenAPI import**: File ▸ Import OpenAPI… (⇧⌘O), or a folder's menu, takes an OpenAPI 3.0/3.1
@@ -90,7 +96,7 @@ make            # every target
 The rules for variables, and the rikuest bugs they come from, are in
 [docs/VARIABLES.md](docs/VARIABLES.md).
 
-Not yet: multipart bodies, assertions on responses (the runner judges by status), OAuth 2's
+Not yet: assertions on responses (the runner judges by status), OAuth 2's
 device and implicit grants.
 
 ## How it is built
@@ -102,6 +108,7 @@ src/exec.ray       prepare a request and run the exchange (redirects, timeout, H
 src/urls.ray       URL parsing, percent-encoding without double encoding, Location resolution
 src/vars.ray       {{variables}}: the precedence chain (folders → environment) and substitution
 src/auth.ray       which auth applies (own or inherited) and the header/parameter it adds
+src/multipart.ray  multipart/form-data bodies: parts, files, boundary, names quoted
 src/oauth.ray      OAuth 2: PKCE, the loopback redirect, the token endpoint, refresh
 src/cookies.ray    the cookie jar's rules (RFC 6265): Set-Cookie in, Cookie header out
 src/curl.ray       curl commands: bash word splitting, options → request, send → command

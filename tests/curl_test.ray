@@ -122,12 +122,16 @@ fn what_cannot_be_kept_is_warned_about() {
     let i = imported(
         "curl -k -F 'f=@a.png' -d @body.json --proxy http://p:3128 https://h/ https://other/"
     );
-    assert_eq(i.warnings.len(), 5);
+    assert_eq(i.warnings.len(), 4);
     assert(i.warnings[0].contains("insecure"));
-    assert(i.warnings[1].contains("multipart"));
-    assert(i.warnings[2].contains("body.json"));
-    assert(i.warnings[3].contains("--proxy"));
-    assert(i.warnings[4].contains("https://other/"));
+    assert(i.warnings[1].contains("body.json"));
+    assert(i.warnings[2].contains("--proxy"));
+    assert(i.warnings[3].contains("https://other/"));
+    // The -F part is kept (a multipart body), not warned about.
+    assert_eq(
+        (i.request.body_type, i.request.parts[0].value, i.request.parts[0].file),
+        ("multipart", "a.png", true)
+    );
 }
 
 @test

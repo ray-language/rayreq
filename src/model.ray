@@ -10,7 +10,7 @@ import jsonv;
 
 pub const METHODS: [string] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
-pub const BODY_TYPES: [string] = ["none", "json", "text", "xml", "form"];
+pub const BODY_TYPES: [string] = ["none", "json", "text", "xml", "form", "multipart"];
 
 pub const DEFAULT_TIMEOUT_MS: int = 30000;
 
@@ -85,6 +85,17 @@ pub struct Pair {
     enabled: bool,
 }
 
+/// One part of a multipart/form-data body: a text field, or a file (`value` is its path on this
+/// computer, read when the request is sent). `content_type` is optional ("" = text/plain for a
+/// field, guessed from the name for a file).
+pub struct Part {
+    key: string,
+    value: string,
+    enabled: bool,
+    file: bool,
+    content_type: string,
+}
+
 pub struct Project {
     id: int,
     name: string,
@@ -128,6 +139,8 @@ pub struct Request {
     body_type: string,
     body: string,
     form: [Pair],
+    /// The parts of a multipart body.
+    parts: [Part],
     /// After a 2xx JSON response: `key` = the variable to set in the active environment,
     /// `value` = the path in the body (`data.items[0].id`).
     captures: [Pair],
@@ -155,6 +168,7 @@ pub fn new_request(project_id: int, folder_id: int, name: string) -> Request {
         body_type: "none",
         body: "",
         form: [],
+        parts: [],
         captures: [],
         auth: auth_of_kind("inherit"),
         use_cookies: true,
@@ -325,6 +339,7 @@ pub fn request_json(r: Request) -> json.Json {
             ("body_type", jsonv.str(r.body_type)),
             ("body", jsonv.str(r.body)),
             ("form", pairs_json(r.form)),
+            ("parts", parts_json(r.parts)),
             ("captures", pairs_json(r.captures)),
             ("auth", auth_json(r.auth)),
             ("use_cookies", jsonv.flag(r.use_cookies)),
@@ -384,6 +399,7 @@ pub fn request_of(j: json.Json) -> Result<Request, string> {
         body_type: body_type,
         body: jsonv.get_str(j, "body"),
         form: pairs_of(j, "form"),
+        parts: parts_of(j, "parts"),
         captures: pairs_of(j, "captures"),
         auth: match (json.member(j, "auth")) {
             Option.Some(a) => auth_of(a)?,
@@ -397,6 +413,57 @@ pub fn request_of(j: json.Json) -> Result<Request, string> {
         created_at: jsonv.get_int(j, "created_at"),
         updated_at: jsonv.get_int(j, "updated_at")
     })
+}
+
+pub fn parts_json(ps: [Part]) -> json.Json {
+    var out: [json.Json] = [];
+    for p in ps {
+        out.push(
+            jsonv.obj(
+                [
+                    ("key", jsonv.str(p.key)),
+                    ("value", jsonv.str(p.value)),
+                    ("enabled", jsonv.flag(p.enabled)),
+                    ("file", jsonv.flag(p.file)),
+                    ("content_type", jsonv.str(p.content_type))
+                ]
+            )
+        );
+    }
+    jsonv.arr(out)
+}
+
+pub fn parts_of(j: json.Json, key: string) -> [Part] {
+    var out: [Part] = [];
+    for item in json.get_array(j, key).unwrap_or([]) {
+        let k = jsonv.get_str(item, "key");
+        let v = jsonv.get_str(item, "value");
+        // The editor's trailing blank row.
+        if (k == "" && v == "") {
+            continue;
+        }
+        out.push(
+            Part {
+                key: k,
+                value: v,
+                enabled: jsonv.get_bool(item, "enabled", true),
+                file: jsonv.get_bool(item, "file", false),
+                content_type: jsonv.get_str(item, "content_type")
+            }
+        );
+    }
+    out
+}
+
+pub fn parts_text(ps: [Part]) -> string {
+    json.stringify(parts_json(ps))
+}
+
+pub fn parts_from_text(s: string) -> [Part] {
+    match (json.parse("{\"p\":" + s + "}")) {
+        Result.Ok(j) => parts_of(j, "p"),
+        Result.Err(_) => [],
+    }
 }
 
 /// Pairs stored as JSON text in a column.
