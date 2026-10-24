@@ -336,6 +336,11 @@ fn failed(
     }
 }
 
+/// An outcome for a request that was never sent (a step before it failed: an OAuth 2 token).
+pub fn not_sent(p: Prepared, error: string) -> Outcome {
+    failed(p, error, time.monotonic_millis(), time.now(), [], [])
+}
+
 /// The names in the Cookie headers the user wrote: the jar does not send those again.
 fn hand_cookie_names(hs: [(string, string)]) -> [string] {
     var out: [string] = [];

@@ -5,7 +5,7 @@
 import * as A from "./actions.js";
 import { call } from "./api.js";
 import { setLanguage, t } from "./i18n.js";
-import { activeTab, isDirty, state } from "./state.js";
+import { activeTab, emit, isDirty, state } from "./state.js";
 import { $ } from "./util.js";
 import * as R from "./runner.js";
 import * as V from "./variables.js";
@@ -341,6 +341,34 @@ export async function run(port) {
     expect(again.passed === 1 && again.failed === 1 && results2.join() === "passed,skipped,failed", `second run: ${results2}`);
     $("runner-stop-on-failure").checked = false;
     $("runner-dialog").close("");
+
+    // OAuth 2: client credentials got by the send itself, then the code flow through the token
+    // box's button (the program plays the browser in --check) with PKCE.
+    const oauthReq = await call("requests.create", { project_id: state.project.id, folder_id: 0, name: "OAuth" });
+    await A.openRequest(oauthReq.id);
+    const tab4 = activeTab();
+    tab4.draft.url = `${base}/echo`;
+    tab4.draft.auth = {
+      ...tab4.draft.auth, kind: "oauth2", grant: "client_credentials", token_url: `${base}/oauth/token`,
+      auth_url: `${base}/oauth/authorize`, client_id: "app", client_secret: "s3cret", pkce: true,
+    };
+    await A.save(tab4);
+    emit("reload-editor");
+    await A.send(tab4);
+    expect(tab4.response.ok && tab4.response.text.includes('"auth":"Bearer cc-token"') && tab4.response.oauth === "obtained",
+      `OAuth client credentials: ${tab4.response.text || tab4.response.error}`);
+    tab4.draft.auth = { ...tab4.draft.auth, grant: "authorization_code" };
+    await A.save(tab4);
+    emit("reload-editor");
+    const tokenBox = $("auth-editor").querySelector(".token-box");
+    await until(() => !tokenBox.hidden && tokenBox.querySelector(".token-status").dataset.state === "other",
+      `the token box says the token is for other settings: ${tokenBox.querySelector(".token-status").textContent}`);
+    tokenBox.querySelector("ray-button").click();
+    await until(() => tokenBox.querySelector(".token-status").dataset.state === "ok", "the code flow got a token", 15000);
+    await A.send(tab4);
+    expect(tab4.response.text.includes('"auth":"Bearer ac-token"'), `OAuth code flow: ${tab4.response.text || tab4.response.error}`);
+    await A.closeTab(tab4.id);
+    A.activate(tab.id);
 
     // Spanish and back.
     setLanguage("es");

@@ -1,0 +1,520 @@
+// OAuth 2: the pieces (PKCE, the loopback redirect, the token endpoint's answers) and the flows
+// against a local authorization server on port 0, including a send that gets its own token.
+
+import std/base64;
+import std/fs;
+import std/json;
+import std/net;
+import std/time;
+import std/url;
+import net/webserver;
+import api;
+import exec;
+import model;
+import oauth;
+import store;
+
+fn settings(grant: string, port: int) -> model.Auth {
+    var a = model.auth_of_kind("oauth2");
+    a.grant = grant;
+    a.auth_url = "http://127.0.0.1:${port}/authorize";
+    a.token_url = "http://127.0.0.1:${port}/token";
+    a.client_id = "app";
+    a.client_secret = "s3cret";
+    a.scope = "read write";
+    a
+}
+
+fn form_text(r: model.Request) -> [string] {
+    r.form.map(fn(p: model.Pair) -> string { "${p.key}=${p.value}" })
+}
+
+@test
+fn pkce_follows_rfc_7636() {
+    // RFC 7636, appendix B.
+    assert_eq(
+        oauth.challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    );
+    let v = oauth.new_verifier();
+    assert_eq(v.len(), 43);
+    assert(v != oauth.new_verifier());
+}
+
+@test
+fn the_redirect_uri_must_come_back_to_this_computer() {
+    let d = oauth.loopback("").unwrap();
+    assert_eq((d.host, d.port, d.path), ("127.0.0.1", 0, "/callback"));
+    let l = oauth.loopback("http://localhost:8765/cb?x=1").unwrap();
+    assert_eq((l.host, l.port, l.path), ("localhost", 8765, "/cb"));
+    assert_eq(oauth.loopback("http://127.0.0.1:9000").unwrap().path, "/");
+    for bad in [
+        "https://app.example.com/cb",
+        "http://example.com:80/cb",
+        "http://127.0.0.1:99999/x",
+        "myapp://cb"
+    ] {
+        assert(oauth.loopback(bad).is_err());
+    }
+}
+
+@test
+fn the_authorization_url_carries_the_client_state_and_challenge() {
+    let a = settings("authorization_code", 1);
+    let u = oauth.authorize_url(a, "http://127.0.0.1:5555/callback", "st", "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+        .unwrap();
+    assert_eq(
+        u,
+        "http://127.0.0.1:1/authorize?response_type=code&client_id=app&redirect_uri=http%3A%2F%2F127.0.0.1%3A5555%2Fcallback&state=st&scope=read%20write&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256"
+    );
+    var no_pkce = a.clone();
+    no_pkce.pkce = false;
+    no_pkce.auth_url = "http://h/auth?tenant=x";
+    let v = oauth.authorize_url(no_pkce, "r", "s", "v").unwrap();
+    assert(
+        v.starts_with("http://h/auth?tenant=x&response_type=code") && !v.contains("code_challenge")
+    );
+    var empty = a.clone();
+    empty.client_id = " ";
+    assert(oauth.authorize_url(empty, "r", "s", "v").is_err());
+}
+
+@test
+fn what_the_browser_brings_back() {
+    match (oauth.read_callback("/callback?code=a%2Bb&state=st", "/callback", "st").unwrap()) {
+        oauth.Callback.Code(c) => assert_eq(c, "a+b"),
+        _ => panic("expected the code"),
+    }
+    match (oauth.read_callback("/callback?error=access_denied&error_description=No+way&state=st", "/callback", "st")
+        .unwrap()) {
+        oauth.Callback.Denied(why) => assert_eq(why, "access_denied: No way"),
+        _ => panic("expected a denial"),
+    }
+    match (oauth.read_callback("/favicon.ico", "/callback", "st").unwrap()) {
+        oauth.Callback.Other => { },
+        _ => panic("expected another path"),
+    }
+    assert(oauth.read_callback("/callback?code=x&state=forged", "/callback", "st")
+        .unwrap_err_text()
+        .contains("state"));
+    assert(oauth.read_callback("/callback?state=st", "/callback", "st").is_err());
+}
+
+fn unwrap_err_text<T>(r: Result<T, string>) -> string {
+    match (r) {
+        Result.Ok(_) => "",
+        Result.Err(e) => e,
+    }
+}
+
+@test
+fn the_client_authenticates_as_it_is_told() {
+    let a = settings("client_credentials", 1);
+    let basic = oauth.token_request(a, oauth.grant_fields(a).unwrap()).unwrap();
+    assert_eq(
+        (basic.method, basic.url, basic.body_type),
+        ("POST", "http://127.0.0.1:1/token", "form")
+    );
+    assert_eq(form_text(basic), ["grant_type=client_credentials", "scope=read write"]);
+    assert_eq(basic.headers[1].value, "Basic " + base64.base64("app:s3cret".to_bytes()));
+    var body = a.clone();
+    body.client_auth = "body";
+    assert_eq(
+        form_text(oauth.token_request(body, [("grant_type", "x")]).unwrap()),
+        ["grant_type=x", "client_id=app", "client_secret=s3cret"]
+    );
+    // A public client (no secret) names itself in the body.
+    var public = a.clone();
+    public.client_secret = "";
+    let p = oauth.token_request(public, [("grant_type", "x")]).unwrap();
+    assert_eq((form_text(p), p.headers.len()), (["grant_type=x", "client_id=app"], 1));
+    // Characters of the client's own are form-encoded before Basic (RFC 6749 §2.3.1).
+    var odd = a.clone();
+    odd.client_id = "a:b";
+    assert_eq(
+        oauth.token_request(odd, []).unwrap().headers[1].value,
+        "Basic " + base64.base64("a%3Ab:s3cret".to_bytes())
+    );
+    assert(oauth.grant_fields(settings("authorization_code", 1)).is_err());
+}
+
+@test
+fn the_token_endpoints_answers() {
+    let a = settings("client_credentials", 1);
+    let t = oauth.parse_token(a, 200, `{"access_token":"AT","token_type":"bearer","expires_in":3600,"refresh_token":"RT","scope":"read"}`, 1000, "")
+        .unwrap();
+    assert_eq(
+        (t.access_token, t.refresh_token, t.expires_at, t.scope),
+        ("AT", "RT", 1000 + 3600 * 1000, "read")
+    );
+    assert_eq(oauth.header(t), "Bearer AT");
+    assert(oauth.usable(t, a, 1000));
+    assert(!oauth.usable(t, a, 1000 + 3600 * 1000 - 10000));
+    // Another client or scope: not this token.
+    var other = a.clone();
+    other.scope = "admin";
+    assert(!oauth.usable(t, other, 1000));
+    // expires_in as a string; no expiry; a refresh without a new refresh token keeps the old one.
+    assert_eq(
+        oauth.parse_token(a, 200, `{"access_token":"x","expires_in":"60"}`, 0, "").unwrap().expires_at,
+        60000
+    );
+    let forever = oauth.parse_token(a, 200, `{"access_token":"x"}`, 0, "OLD").unwrap();
+    assert_eq(
+        (forever.expires_at, forever.refresh_token, forever.token_type),
+        (0, "OLD", "Bearer")
+    );
+    assert(oauth.usable(forever, a, 99999999999));
+    for (status, body, want) in [
+        (
+            400,
+            `{"error":"invalid_grant","error_description":"bad code"}`,
+            "invalid_grant — bad code"
+        ),
+        (500, "<html>oops</html>", "without JSON"),
+        (200, `{"token_type":"bearer"}`, "no access_token"),
+        (401, `{}`, "answered 401")
+    ] {
+        let e = unwrap_err_text(oauth.parse_token(a, status, body, 0, ""));
+        assert_eq_msg(e.contains(want), true, e);
+    }
+}
+
+// ---- against a local authorization server --------------------------------------------------
+
+fn form_of(body: bytes) -> Map<string, string> {
+    let m: Map<string, string> = Map.new();
+    for part in from_utf8(body).unwrap_or("").split("&") {
+        let kv = part.split("=");
+        if (kv.len() == 2) {
+            m.insert(
+                url.url_decode(kv[0].replace("+", " ")).unwrap(),
+                url.url_decode(kv[1].replace("+", " ")).unwrap()
+            );
+        }
+    }
+    m
+}
+
+fn query_of(q: string) -> Map<string, string> {
+    form_of(q.to_bytes())
+}
+
+fn token_json(access: string, refresh: string, expires_in: int) -> webserver.Response {
+    webserver.json_response(
+        "{\"access_token\":\"${access}\",\"token_type\":\"Bearer\",\"expires_in\":${expires_in},\"refresh_token\":\"${refresh}\"}"
+    )
+}
+
+/// A stateless authorization server: the code it hands out carries the PKCE challenge, so the
+/// token endpoint can check the verifier without remembering anything.
+fn server(req: webserver.Request) -> webserver.Response {
+    if (req.path == "/authorize") {
+        let q = query_of(req.query);
+        let back = q.get_or("redirect_uri", "");
+        let target = if (q.get_or("client_id", "") != "app") {
+            "${back}?error=unauthorized_client&state=${url.url_encode(q.get_or("state", ""))}"
+        } else {
+            "${back}?code=code-${q.get_or("code_challenge", "")}&state=${url.url_encode(q.get_or("state", ""))}"
+        };
+        var r = webserver.text(302, "");
+        r.headers.insert("Location", target);
+        return r;
+    }
+    if (req.path == "/token") {
+        let f = form_of(req.body);
+        if (req.headers.get_or(
+            "authorization",
+            ""
+        ) != "Basic " + base64.base64("app:s3cret".to_bytes())) {
+            var r = webserver.json_response("{\"error\":\"invalid_client\"}");
+            r.status = 401;
+            return r;
+        }
+        let grant = f.get_or("grant_type", "");
+        if (grant == "client_credentials") {
+            return token_json("cc-token", "", 3600);
+        }
+        if (grant == "password") {
+            if (f.get_or("username", "") != "ana" || f.get_or("password", "") != "pw") {
+                var r = webserver.json_response(
+                    "{\"error\":\"invalid_grant\",\"error_description\":\"wrong password\"}"
+                );
+                r.status = 400;
+                return r;
+            }
+            return token_json("pw-token", "pw-refresh", 3600);
+        }
+        if (grant == "authorization_code") {
+            let code = f.get_or("code", "");
+            if (!code.starts_with("code-")
+                || oauth.challenge(f.get_or("code_verifier", "")) != code.substring(5, code.len())) {
+                var r = webserver.json_response(
+                    "{\"error\":\"invalid_grant\",\"error_description\":\"PKCE check failed\"}"
+                );
+                r.status = 400;
+                return r;
+            }
+            return token_json("ac-token", "ac-refresh", 3600);
+        }
+        if (grant == "refresh_token") {
+            return token_json("refreshed-" + f.get_or("refresh_token", ""), "", 3600);
+        }
+        var r = webserver.json_response("{\"error\":\"unsupported_grant_type\"}");
+        r.status = 400;
+        return r;
+    }
+    // A protected resource: says which token came.
+    webserver.text(200, "auth=" + req.headers.get_or("authorization", ""))
+}
+
+fn start() -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    let _t = spawn(fn() {
+        let _ = webserver.serve_options_on(l, webserver.options()
+            .quiet(), fn() -> fn(webserver.Request) -> webserver.Response { server });
+    });
+    port
+}
+
+/// A browser: follows the authorization server's redirect back to the loopback address.
+fn browse(u: string) {
+    var r = model.new_request(0, 0, "browser");
+    r.url = u;
+    let _ = exec.run(exec.prepare(r).unwrap());
+}
+
+fn no_cancel() -> Channel<bool> {
+    let c: Channel<bool> = Channel.bounded(1);
+    c
+}
+
+@test
+fn the_code_flow_with_pkce_through_a_browser() {
+    let port = start();
+    let a = settings("authorization_code", port);
+    let login = oauth.begin(a).unwrap();
+    assert(
+        login.redirect.starts_with("http://127.0.0.1:") && login.redirect.ends_with("/callback")
+    );
+    let u = login.url;
+    let _b = spawn(fn() {
+        browse(u);
+    });
+    let t = oauth.complete(a, login, no_cancel()).unwrap();
+    assert_eq((t.access_token, t.refresh_token), ("ac-token", "ac-refresh"));
+    // A client the server does not know: the browser comes back with an error.
+    var stranger = a.clone();
+    stranger.client_id = "nobody";
+    let refused = oauth.begin(stranger).unwrap();
+    let r = refused.url;
+    let _b2 = spawn(fn() {
+        browse(r);
+    });
+    let e = unwrap_err_text(oauth.complete(stranger, refused, no_cancel()));
+    assert_eq_msg(e.contains("denied: unauthorized_client"), true, e);
+}
+
+@test
+fn waiting_for_the_browser_can_be_cancelled() {
+    let a = settings("authorization_code", 1);
+    let login = oauth.begin(a).unwrap();
+    let cancel: Channel<bool> = Channel.bounded(1);
+    send(cancel, true);
+    let started = time.now();
+    assert(unwrap_err_text(oauth.complete(a, login, cancel)).contains("cancelled"));
+    assert(time.now() - started < 3000);
+}
+
+@test
+fn grants_without_a_browser() {
+    let port = start();
+    assert_eq(
+        oauth.fetch(settings("client_credentials", port), Option.None).unwrap().access_token,
+        "cc-token"
+    );
+    var pw = settings("password", port);
+    pw.username = "ana";
+    pw.password = "pw";
+    assert_eq(oauth.fetch(pw, Option.None).unwrap().access_token, "pw-token");
+    pw.password = "nope";
+    assert(unwrap_err_text(oauth.fetch(pw, Option.None)).contains("wrong password"));
+    var wrong = settings("client_credentials", port);
+    wrong.client_secret = "bad";
+    assert(unwrap_err_text(oauth.fetch(wrong, Option.None)).contains("invalid_client"));
+    // A stored token with a refresh token is refreshed rather than asked for again.
+    let ac = settings("authorization_code", port);
+    let old = oauth.Token {
+        access_token: "old",
+        token_type: "Bearer",
+        refresh_token: "R1",
+        expires_at: 1,
+        scope: "",
+        obtained_at: 0,
+        config: oauth.fingerprint(ac)
+    };
+    let fresh = oauth.fetch(ac, Option.Some(old)).unwrap();
+    assert_eq((fresh.access_token, fresh.refresh_token), ("refreshed-R1", "R1"));
+    assert(oauth.fetch(ac, Option.None).is_err());
+}
+
+// ---- a send that needs a token -------------------------------------------------------------
+
+fn fresh() -> store.Store {
+    let dir = fs.make_temp_dir("rayreq-oauth").unwrap();
+    store.open(dir + "/rayreq.db").unwrap()
+}
+
+/// handle → execute (the fiber's part, token included) → finish, as the main loop does.
+fn send_stored(s: store.Store, id: int) -> (api.Job, json.Json) {
+    let r = model.request_json(store.get_request(s, id).unwrap());
+    let job = match (api.handle(s, "{\"op\":\"send\",\"run\":1,\"request\":${json.stringify(r)}}")) {
+        api.Action.Send(j) => j,
+        api.Action.Reply(x) => panic(x),
+        _ => panic("unexpected action"),
+    };
+    let (done, o) = api.execute(job);
+    let reply = json.parse(api.finish(s, done, o)).unwrap();
+    (job, json.member(reply, "value").unwrap())
+}
+
+@test
+fn a_send_gets_keeps_and_reuses_its_token() {
+    let port = start();
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = store.active_environment(s, p.id).unwrap().unwrap();
+    let f = store.create_folder(s, p.id, 0, "API").unwrap();
+    // The folder's auth, with its secret in the environment.
+    var a = settings("client_credentials", port);
+    a.client_secret = "{{secret}}";
+    store.save_folder_auth(s, f.id, a).unwrap();
+    store.save_environment_variables(s, env.id, [model.Pair { key: "secret", value: "s3cret", enabled: true }])
+        .unwrap();
+    var r = model.new_request(p.id, f.id, "me");
+    r.url = "http://127.0.0.1:${port}/me";
+    let r = store.create_request(s, r).unwrap();
+
+    let (first, out) = send_stored(s, r.id);
+    assert(first.oauth.is_some());
+    assert_eq(json.get_string(out, "text").unwrap(), "auth=Bearer cc-token");
+    assert_eq(json.get_string(out, "oauth").unwrap(), "obtained");
+    // Kept under the folder, for this environment; the request stays as it was.
+    let kept = store.get_token(s, env.id, store.owner_of(f.id, 0)).unwrap().unwrap();
+    assert_eq(kept.access_token, "cc-token");
+    assert_eq(store.get_request(s, r.id).unwrap().auth.kind, "inherit");
+    // The next send uses it as it is.
+    let (second, out2) = send_stored(s, r.id);
+    assert(second.oauth.is_none());
+    assert_eq(json.get_string(out2, "text").unwrap(), "auth=Bearer cc-token");
+    // Expired, with a refresh token: refreshed in the send.
+    store.save_token(s, env.id, store.owner_of(f.id, 0), oauth.Token {
+        access_token: "x",
+        token_type: "Bearer",
+        refresh_token: "R9",
+        expires_at: 1,
+        scope: "",
+        obtained_at: 0,
+        config: kept.config
+    })
+        .unwrap();
+    let (_, out3) = send_stored(s, r.id);
+    assert_eq(json.get_string(out3, "text").unwrap(), "auth=Bearer refreshed-R9");
+    // A hand-written Authorization header wins.
+    var own = store.get_request(s, r.id).unwrap();
+    own.headers = [model.Pair { key: "Authorization", value: "Bearer mine", enabled: true }];
+    store.save_request(s, own).unwrap();
+    let (_, out4) = send_stored(s, r.id);
+    assert_eq(json.get_string(out4, "text").unwrap(), "auth=Bearer mine");
+}
+
+@test
+fn a_failed_token_request_fails_the_send_before_it_leaves() {
+    let port = start();
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    var r = model.new_request(p.id, 0, "me");
+    r.url = "http://127.0.0.1:${port}/me";
+    var a = settings("client_credentials", port);
+    a.client_secret = "wrong";
+    r.auth = a;
+    let r = store.create_request(s, r).unwrap();
+    let (_, out) = send_stored(s, r.id);
+    assert_eq(json.get_bool(out, "ok").unwrap(), false);
+    assert(json.get_string(out, "error").unwrap().contains("invalid_client"));
+    assert_eq(json.get_int(out, "status").unwrap(), 0);
+}
+
+@test
+fn the_code_flow_asks_for_the_browser_first() {
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    var r = model.new_request(p.id, 0, "me");
+    r.url = "http://127.0.0.1:1/me";
+    r.auth = settings("authorization_code", 1);
+    let r = store.create_request(s, r).unwrap();
+    match (api.handle(
+        s,
+        "{\"op\":\"send\",\"run\":1,\"request\":${json.stringify(model.request_json(r))}}"
+    )) {
+        api.Action.Reply(x) => assert(x.contains("get one in the Auth tab")),
+        _ => panic("sent without a token"),
+    }
+    // The status op says there is none, and that it cannot be had without the user.
+    let body = "{\"op\":\"oauth.status\",\"request\":${json.stringify(model.request_json(r))}}";
+    match (api.handle(s, body)) {
+        api.Action.Reply(x) => {
+            let v = json.member(json.parse(x).unwrap(), "value").unwrap();
+            assert_eq(json.get_bool(json.member(v, "token").unwrap(), "has_token").unwrap(), false);
+            assert_eq(json.get_bool(v, "automatic").unwrap(), false);
+        },
+        _ => panic("expected a reply"),
+    }
+}
+
+@test
+fn get_new_token_through_the_protocol() {
+    let port = start();
+    let s = fresh();
+    let p = store.create_project(s, "P", "").unwrap();
+    let env = store.active_environment(s, p.id).unwrap().unwrap();
+    let f = store.create_folder(s, p.id, 0, "API").unwrap();
+    // The folder dialog's draft auth (not saved yet) with a variable left undefined.
+    var a = settings("password", port);
+    a.username = "{{user}}";
+    a.password = "pw";
+    let body = "{\"op\":\"oauth.token\",\"run\":7,\"project_id\":${p.id},\"folder_id\":${f.id},\"auth\":${json.stringify(model.auth_json(a))}}";
+    match (api.handle(s, body)) {
+        api.Action.Reply(x) => assert(x.contains("not defined: user")),
+        _ => panic("expected the missing variable"),
+    }
+    store.save_environment_variables(s, env.id, [model.Pair { key: "user", value: "ana", enabled: true }])
+        .unwrap();
+    let job = match (api.handle(s, body)) {
+        api.Action.OAuth(j) => j,
+        api.Action.Reply(x) => panic(x),
+        _ => panic("expected a token job"),
+    };
+    assert_eq((job.run, job.owner, job.auth.username), (7, "folder:${f.id}", "ana"));
+    let reply = json.parse(api.keep_token(s, job, api.obtain(job))).unwrap();
+    let info = json.member(reply, "value").unwrap();
+    assert_eq(
+        (json.get_bool(info, "usable").unwrap(), json.get_string(info, "preview").unwrap()),
+        (true, "…")
+    );
+    assert_eq(
+        store.get_token(s, env.id, "folder:${f.id}").unwrap().unwrap().access_token,
+        "pw-token"
+    );
+    // Cleared, and gone with its folder.
+    let clear = "{\"op\":\"oauth.clear\",\"project_id\":${p.id},\"folder_id\":${f.id},\"auth\":${json.stringify(model.auth_json(a))}}";
+    match (api.handle(s, clear)) {
+        api.Action.Reply(x) => assert(x.contains("\"ok\":true")),
+        _ => panic("expected a reply"),
+    }
+    assert(store.get_token(s, env.id, "folder:${f.id}").unwrap().is_none());
+    api.keep_token(s, job, api.obtain(job));
+    store.delete_folder(s, f.id).unwrap();
+    assert_eq(store.query(s, "SELECT COUNT(*) FROM oauth_tokens", []).unwrap()[0][0], "0");
+}

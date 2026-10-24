@@ -151,6 +151,10 @@ table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: br
 /* ---- auth ---------------------------------------------------------------------------------- */
 
 .auth-pane { max-width: 32rem; }
+.token-box { border: 1px solid var(--ray-border); border-radius: var(--ray-radius-md); padding: var(--ray-space-sm) var(--ray-space-md); display: grid; gap: var(--ray-space-xs); }
+.token-head { font-size: var(--ray-font-size-sm); font-weight: var(--ray-font-weight-medium); }
+.token-status { margin: 0; }
+.token-status[data-state="ok"] { color: var(--ray-green-light-color); }
 .note.inline { margin: 0; }
 
 /* ---- cookies ------------------------------------------------------------------------------- */

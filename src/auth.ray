@@ -12,29 +12,40 @@ import store;
 import vars;
 
 /// The auth a request uses and where it comes from: `from` is "request", "folder" (`source` =
-/// the folder's name) or "none" (nothing up the chain has one).
+/// the folder's name) or "none" (nothing up the chain has one). `owner` is whose it is
+/// ("request:<id>" / "folder:<id>"): an OAuth 2 token is kept under it.
 pub struct Effective {
     auth: model.Auth,
     from: string,
     source: string,
+    owner: string,
 }
 
 /// `r`'s own auth unless it inherits; then the nearest folder above `folder_id` (deepest
 /// first) whose auth is not "inherit". A store error is an error.
 pub fn effective(s: store.Store, r: model.Request, folder_id: int) -> Result<Effective, string> {
     if (r.auth.kind != "inherit") {
-        return Result.Ok(Effective { auth: r.auth, from: "request", source: "" });
+        return Result.Ok(
+            Effective { auth: r.auth, from: "request", source: "", owner: store.owner_of(0, r.id) }
+        );
     }
     let chain = vars.ancestry(s, folder_id)?;
     var i = chain.len() - 1;
     while (i >= 0) {
         let f = chain[i];
         if (f.auth.kind != "inherit") {
-            return Result.Ok(Effective { auth: f.auth, from: "folder", source: f.name });
+            return Result.Ok(
+                Effective {
+                    auth: f.auth,
+                    from: "folder",
+                    source: f.name,
+                    owner: store.owner_of(f.id, 0)
+                }
+            );
         }
         i = i - 1;
     }
-    Result.Ok(Effective { auth: model.auth_of_kind("none"), from: "none", source: "" })
+    Result.Ok(Effective { auth: model.auth_of_kind("none"), from: "none", source: "", owner: "" })
 }
 
 fn has_header(r: model.Request, name: string) -> bool {

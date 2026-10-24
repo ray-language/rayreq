@@ -345,7 +345,10 @@ export function initVariables() {
     keyLabel: "kv.variable",
     onChange: (rows) => { if (editing) envDrafts.set(editing, rows); },
   });
-  folderAuth = new AuthEditor($("folder-auth"), { forFolder: true });
+  folderAuth = new AuthEditor($("folder-auth"), {
+    forFolder: true,
+    oauthContext: () => (folderAuthId && state.project ? { project_id: state.project.id, folder_id: folderAuthId } : null),
+  });
   $("folder-auth-save").addEventListener("click", () => A.guard(async () => {
     await call("folders.save_auth", { id: folderAuthId, auth: folderAuth.value });
     $("folder-auth-dialog").close("ok");

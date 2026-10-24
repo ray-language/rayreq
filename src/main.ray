@@ -13,11 +13,14 @@
 
 import std/fs;
 import std/json;
+import std/process;
 import std/ui;
 import elements/bridge;
 import api;
 import exec;
 import menus;
+import model;
+import oauth;
 import openapi;
 import selfcheck;
 import store;
@@ -31,6 +34,8 @@ enum Msg {
     Done(api.Job, exec.Outcome),
     /// An API description was read: the page's request it answers, the job and the result.
     Spec(Pending, api.SpecJob, Result<openapi.Imported, string>),
+    /// An OAuth 2 token request ended: the page's request it answers, the job and the token.
+    Token(Pending, api.OAuthJob, Result<oauth.Token, string>),
 }
 
 /// A send the page is waiting for.
@@ -88,7 +93,51 @@ fn forward(inbox: Channel<Msg>) {
 }
 
 fn run_send(inbox: Channel<Msg>, job: api.Job) {
-    send(inbox, Msg.Done(job, exec.run(job.prepared)));
+    let (done, outcome) = api.execute(job);
+    send(inbox, Msg.Done(done, outcome));
+}
+
+/// A token for the page from a grant without a browser.
+fn run_token(inbox: Channel<Msg>, p: Pending, job: api.OAuthJob) {
+    send(inbox, Msg.Token(p, job, api.obtain(job)));
+}
+
+/// The code flow once the browser is open: wait for it to come back, exchange the code.
+fn run_login(
+    inbox: Channel<Msg>,
+    p: Pending,
+    job: api.OAuthJob,
+    login: oauth.Pending,
+    cancel: Channel<bool>
+) {
+    send(inbox, Msg.Token(p, job, oauth.complete(job.auth, login, cancel)));
+}
+
+/// Opens `url` in the default browser (no shell: the URL is an argument).
+fn open_browser(url: string) -> Result<int, string> {
+    let os = platform();
+    let cmd = if (os == "macos") {
+        process.cmd("open", [url])
+    } else if (os == "windows") {
+        process.cmd("rundll32", ["url.dll,FileProtocolHandler", url])
+    } else {
+        process.cmd("xdg-open", [url])
+    };
+    cmd.spawn_detached()
+}
+
+/// `--check` has no one at a browser: this fiber plays it, following the authorization
+/// server's redirect back to the loopback address.
+fn play_browser(url: string) {
+    var r = model.new_request(0, 0, "browser");
+    r.url = url;
+    r.timeout_ms = 10000;
+    match (exec.prepare(r)) {
+        Result.Ok(p) => {
+            let _ = exec.run(p);
+        },
+        Result.Err(e) => eprint("rayreq: check browser: " + e),
+    }
 }
 
 /// Reading and converting a large description takes seconds: it happens here, and the main
@@ -193,6 +242,8 @@ fn run(check: bool) -> Result<int, string> {
         forward(inbox);
     });
     let pending: Map<int, Pending> = Map.new();
+    // Logins waiting for the browser, by the page's run id: a value stops one.
+    let logins: Map<int, Channel<bool>> = Map.new();
     let ask_quit = "window.rayreq ? window.rayreq.requestQuit() : window.ray.request({op: 'quit'})";
 
     while (true) {
@@ -209,6 +260,10 @@ fn run(check: bool) -> Result<int, string> {
                 }
             },
             Msg.Spec(p, job, imported) => reply(p.window, p.reply, api.store_spec(s, job, imported)),
+            Msg.Token(p, job, got) => {
+                logins.remove(job.run);
+                reply(p.window, p.reply, api.keep_token(s, job, got));
+            },
             Msg.Ui(raw) => {
                 let e = match (bridge.route(native, raw)) {
                     Option.Some(e) => e,
@@ -281,6 +336,45 @@ fn run(check: bool) -> Result<int, string> {
                         let _t = spawn(fn() {
                             run_spec(inbox, p, job);
                         });
+                    },
+                    api.Action.OAuth(job) => {
+                        let p = Pending { window: target, reply: id };
+                        if (job.auth.grant != "authorization_code") {
+                            let _t = spawn(fn() {
+                                run_token(inbox, p, job);
+                            });
+                            continue;
+                        }
+                        let login = match (oauth.begin(job.auth)) {
+                            Result.Ok(l) => l,
+                            Result.Err(err) => {
+                                reply(target, id, api.fail(err));
+                                continue;
+                            },
+                        };
+                        if (check) {
+                            let u = login.url;
+                            let _b = spawn(fn() {
+                                play_browser(u);
+                            });
+                        } else {
+                            if let Result.Err(err) = open_browser(login.url) {
+                            close(login.listener);
+                            reply(target, id, api.fail("cannot open the browser: ${err}"));
+                            continue;
+                        }
+                        }
+                        let cancel: Channel<bool> = Channel.bounded(1);
+                        logins.insert(job.run, cancel);
+                        let _t = spawn(fn() {
+                            run_login(inbox, p, job, login, cancel);
+                        });
+                    },
+                    api.Action.OAuthCancel(run_id) => {
+                        if let Option.Some(ch) = logins.get(run_id) {
+                            send(ch, true);
+                        }
+                        reply(target, id, api.ok(json.Json.JBool(true)));
                     },
                     api.Action.Quit => {
                         reply(target, id, api.ok(json.Json.JBool(true)));

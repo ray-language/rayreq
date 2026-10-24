@@ -5,9 +5,26 @@
 import std/json;
 import std/net;
 import std/time;
+import std/url;
 import net/webserver;
+import oauth;
 
 const WATCHDOG_MS: int = 30000;
+
+/// `a=1&b=x%20y` as a map, decoded.
+fn query_map(q: string) -> Map<string, string> {
+    let m: Map<string, string> = Map.new();
+    for part in q.split("&") {
+        let kv = part.split("=");
+        if (kv.len() == 2) {
+            m.insert(
+                url.url_decode(kv[0]).unwrap_or(kv[0]),
+                url.url_decode(kv[1].replace("+", " ")).unwrap_or(kv[1])
+            );
+        }
+    }
+    m
+}
 
 fn echo(req: webserver.Request) -> webserver.Response {
     if (req.path == "/redirect") {
@@ -20,6 +37,38 @@ fn echo(req: webserver.Request) -> webserver.Response {
         r.headers.insert("Location", "/echo?from=login");
         r.set_cookie.push("sid=abc; Path=/; HttpOnly");
         return r;
+    }
+    if (req.path == "/oauth/authorize") {
+        // Approves at once: back to the app's loopback address with a code that carries the
+        // PKCE challenge (so the token endpoint can check the verifier without state).
+        let q = query_map(req.query);
+        let back = q.get_or("redirect_uri", "");
+        var r = webserver.text(302, "");
+        r.headers.insert(
+            "Location",
+            "${back}?code=code-${q.get_or("code_challenge", "")}&state=${url.url_encode(q.get_or("state", ""))}"
+        );
+        return r;
+    }
+    if (req.path == "/oauth/token") {
+        let f = query_map(from_utf8(req.body).unwrap_or(""));
+        let grant = f.get_or("grant_type", "");
+        let access = if (grant == "client_credentials") {
+            "cc-token"
+        } else if (grant == "authorization_code"
+            && f.get_or("code", "") == "code-" + oauth.challenge(f.get_or("code_verifier", ""))) {
+            "ac-token"
+        } else {
+            ""
+        };
+        if (access == "") {
+            var r = webserver.json_response("{\"error\":\"invalid_grant\"}");
+            r.status = 400;
+            return r;
+        }
+        return webserver.json_response(
+            "{\"access_token\":\"${access}\",\"token_type\":\"Bearer\",\"expires_in\":3600}"
+        );
     }
     if (req.path == "/missing") {
         return webserver.text(404, "no such thing");

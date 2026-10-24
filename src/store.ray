@@ -13,6 +13,7 @@ import std/time;
 import db/sqlite;
 import cookies;
 import model;
+import oauth;
 
 pub struct Store {
     conn: sqlite.Conn,
@@ -140,6 +141,24 @@ fn migrations() -> [[string]] {
             )`,
             "CREATE UNIQUE INDEX cookies_key ON cookies(environment_id, name, domain, path)",
             "ALTER TABLE requests ADD COLUMN use_cookies INTEGER NOT NULL DEFAULT 1"
+        ],
+        // 5: OAuth 2 tokens, per environment and owner (oauth.ray). The owner's row goes with it.
+        [
+            `CREATE TABLE oauth_tokens (
+                id INTEGER PRIMARY KEY,
+                environment_id INTEGER NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+                folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+                request_id INTEGER REFERENCES requests(id) ON DELETE CASCADE,
+                owner TEXT NOT NULL,
+                access_token TEXT NOT NULL,
+                token_type TEXT NOT NULL,
+                refresh_token TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                scope TEXT NOT NULL,
+                obtained_at INTEGER NOT NULL,
+                config TEXT NOT NULL
+            )`,
+            "CREATE UNIQUE INDEX oauth_tokens_owner ON oauth_tokens(environment_id, owner)"
         ]
     ]
 }
@@ -1141,4 +1160,86 @@ pub fn clear_cookies(s: Store, environment_id: int) -> Result<int, string> {
 /// expired ones go too.
 pub fn end_cookie_session(s: Store) -> Result<int, string> {
     exec(s, "DELETE FROM cookies WHERE expires = 0 OR expires <= ?", [to_string(time.now())])
+}
+
+// ---- OAuth 2 tokens ------------------------------------------------------------------------
+
+/// Whose token it is: "folder:<id>" or "request:<id>" (oauth.ray).
+pub fn owner_of(folder_id: int, request_id: int) -> string {
+    if (request_id > 0) { "request:${request_id}" } else { "folder:${folder_id}" }
+}
+
+pub fn get_token(
+    s: Store,
+    environment_id: int,
+    owner: string
+) -> Result<Option<oauth.Token>, string> {
+    let rows = query(
+        s,
+        "SELECT access_token, token_type, refresh_token, expires_at, scope, obtained_at, config FROM oauth_tokens WHERE environment_id = ? AND owner = ?",
+        [to_string(environment_id), owner]
+    )?;
+    if (rows.len() == 0) {
+        return Result.Ok(Option.None);
+    }
+    let r = rows[0];
+    Result.Ok(
+        Option.Some(
+            oauth.Token {
+                access_token: r[0],
+                token_type: r[1],
+                refresh_token: r[2],
+                expires_at: int_of(r[3]),
+                scope: r[4],
+                obtained_at: int_of(r[5]),
+                config: r[6]
+            }
+        )
+    )
+}
+
+/// Keeps `t` as the owner's token in the environment (replacing the one before). An owner that
+/// is gone meanwhile (deleted while the token was on its way) keeps nothing.
+pub fn save_token(
+    s: Store,
+    environment_id: int,
+    owner: string,
+    t: oauth.Token
+) -> Result<int, string> {
+    let parts = owner.split(":");
+    let id = if (parts.len() == 2) { int_of(parts[1]) } else { 0 };
+    let (folder_id, request_id) = if (parts[0] == "request") { (0, id) } else { (id, 0) };
+    if (id <= 0) {
+        return Result.Err("OAuth 2: the token has no owner (save the request first)");
+    }
+    tx(s, fn() -> Result<int, string> {
+        exec(
+            s,
+            "DELETE FROM oauth_tokens WHERE environment_id = ? AND owner = ?",
+            [to_string(environment_id), owner]
+        )?;
+        exec(
+            s,
+            "INSERT INTO oauth_tokens (environment_id, folder_id, request_id, owner, access_token, token_type, refresh_token, expires_at, scope, obtained_at, config) VALUES (?, ${id_or_null(folder_id)}, ${id_or_null(request_id)}, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                to_string(environment_id),
+                owner,
+                t.access_token,
+                t.token_type,
+                t.refresh_token,
+                to_string(t.expires_at),
+                t.scope,
+                to_string(t.obtained_at),
+                t.config
+            ]
+        )
+    })
+}
+
+pub fn delete_token(s: Store, environment_id: int, owner: string) -> Result<int, string> {
+    exec(
+        s,
+        "DELETE FROM oauth_tokens WHERE environment_id = ? AND owner = ?",
+        [to_string(environment_id), owner]
+    )
 }

@@ -37,7 +37,11 @@ function cleanPairs(ps) {
 /// An auth with every field in a fixed order (the store's and the editor's may differ).
 function canonicalAuth(a) {
   const x = a || {};
-  return [x.kind || "inherit", x.username || "", x.password || "", x.token || "", x.key || "", x.value || "", x.add_to || "header"];
+  return [
+    x.kind || "inherit", x.username || "", x.password || "", x.token || "", x.key || "", x.value || "", x.add_to || "header",
+    x.grant || "authorization_code", x.auth_url || "", x.token_url || "", x.client_id || "", x.client_secret || "",
+    x.scope || "", x.redirect_uri || "", x.pkce !== false, x.client_auth || "basic",
+  ];
 }
 
 /// The editable part of a request as text: what "dirty" compares.

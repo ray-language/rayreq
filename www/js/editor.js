@@ -4,7 +4,7 @@
 
 import * as A from "./actions.js";
 import { t } from "./i18n.js";
-import { AuthEditor } from "./auth.js";
+import { AUTH_NAMES, AuthEditor } from "./auth.js";
 import { KvEditor } from "./kv.js";
 import { activeTab, emit, on, state } from "./state.js";
 import { $, debounce, paramsFromUrl, reindentJson, urlFromParams } from "./util.js";
@@ -106,13 +106,12 @@ export function loadEditor() {
   refreshVariables();
 }
 
-const AUTH_NAMES = { basic: "Basic", bearer: "Bearer", apikey: "API key" };
-
 /// What the program says about the draft's auth (from `variables`, the send's own plan).
 function renderAuthInfo(tab) {
   if (tab !== activeTab()) return;
   const a = tab.vars && tab.vars.auth;
   $("has-auth").hidden = !a || a.kind === "none" || a.kind === "inherit";
+  authEditor.setEffective(a ? a.kind : "");
   if (!a) return authEditor.setInfo("");
   if (a.from === "folder" && tab.draft.auth?.kind === "inherit") {
     authEditor.setInfo(a.kind === "none"
@@ -167,6 +166,8 @@ export function initEditor() {
   });
 
   authEditor = new AuthEditor($("auth-editor"), {
+    // The token is found through the request (its own auth, or the folder's it inherits).
+    oauthContext: () => (draft() ? { request: draft() } : null),
     onChange: (a) => {
       const d = draft();
       if (!d || loading) return;
@@ -291,6 +292,10 @@ export function initEditor() {
   });
 
   on("response", renderSendButton);
+  // A send may have got (or refreshed) an OAuth 2 token.
+  on("response", (tab) => {
+    if (tab === activeTab() && tab.response && tab.response.oauth) authEditor.refreshToken();
+  });
   on("focus-url", () => requestAnimationFrame(() => $("url").focus()));
   on("resolved", renderAuthInfo);
   on("reload-editor", () => loadEditor());

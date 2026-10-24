@@ -22,11 +22,15 @@ pub const MAX_REDIRECTS_LIMIT: int = 50;
 
 /// "inherit" takes the auth of the nearest folder above that has one of its own; "none" sends
 /// nothing (and stops the inheritance for what is below).
-pub const AUTH_KINDS: [string] = ["inherit", "none", "basic", "bearer", "apikey"];
+pub const AUTH_KINDS: [string] = ["inherit", "none", "basic", "bearer", "apikey", "oauth2"];
+
+/// The OAuth 2 grants rayreq can run (RFC 6749 §4.1 with PKCE, §4.4, §4.3).
+pub const OAUTH_GRANTS: [string] = ["authorization_code", "client_credentials", "password"];
 
 /// How a request (or a folder, for everything below it) authenticates. Only the fields of its
 /// `kind` count; the others are kept so switching kinds back and forth loses nothing. Every
 /// field may hold `{{variables}}`.
+@derive(Clone)
 pub struct Auth {
     kind: string,
     username: string,
@@ -37,10 +41,40 @@ pub struct Auth {
     value: string,
     /// "header" | "query"
     add_to: string,
+    /// oauth2: one of OAUTH_GRANTS; the password grant uses `username`/`password`.
+    grant: string,
+    auth_url: string,
+    token_url: string,
+    client_id: string,
+    client_secret: string,
+    scope: string,
+    /// Where the authorization server sends the browser back: a loopback URL
+    /// (`http://127.0.0.1:<port>/…`); "" = `http://127.0.0.1/callback` on a free port.
+    redirect_uri: string,
+    pkce: bool,
+    /// How the client authenticates to the token endpoint: "basic" (header) | "body".
+    client_auth: string,
 }
 
 pub fn auth_of_kind(kind: string) -> Auth {
-    Auth { kind: kind, username: "", password: "", token: "", key: "", value: "", add_to: "header" }
+    Auth {
+        kind: kind,
+        username: "",
+        password: "",
+        token: "",
+        key: "",
+        value: "",
+        add_to: "header",
+        grant: "authorization_code",
+        auth_url: "",
+        token_url: "",
+        client_id: "",
+        client_secret: "",
+        scope: "",
+        redirect_uri: "",
+        pkce: true,
+        client_auth: "basic"
+    }
 }
 
 /// One row of a key/value table (query params, headers, form fields). Disabled rows are kept
@@ -184,7 +218,16 @@ pub fn auth_json(a: Auth) -> json.Json {
             ("token", jsonv.str(a.token)),
             ("key", jsonv.str(a.key)),
             ("value", jsonv.str(a.value)),
-            ("add_to", jsonv.str(a.add_to))
+            ("add_to", jsonv.str(a.add_to)),
+            ("grant", jsonv.str(a.grant)),
+            ("auth_url", jsonv.str(a.auth_url)),
+            ("token_url", jsonv.str(a.token_url)),
+            ("client_id", jsonv.str(a.client_id)),
+            ("client_secret", jsonv.str(a.client_secret)),
+            ("scope", jsonv.str(a.scope)),
+            ("redirect_uri", jsonv.str(a.redirect_uri)),
+            ("pkce", jsonv.flag(a.pkce)),
+            ("client_auth", jsonv.str(a.client_auth))
         ]
     )
 }
@@ -199,6 +242,16 @@ pub fn auth_of(j: json.Json) -> Result<Auth, string> {
     if (add_to != "header" && add_to != "query") {
         return Result.Err("an API key goes in the header or the query, not '${add_to}'");
     }
+    let grant = json.get_string(j, "grant").unwrap_or("authorization_code");
+    if (!OAUTH_GRANTS.contains(grant)) {
+        return Result.Err("unsupported OAuth 2 grant: '${grant}'");
+    }
+    let client_auth = json.get_string(j, "client_auth").unwrap_or("basic");
+    if (client_auth != "basic" && client_auth != "body") {
+        return Result.Err(
+            "the client authenticates with a Basic header or in the body, not '${client_auth}'"
+        );
+    }
     Result.Ok(
         Auth {
             kind: kind,
@@ -207,7 +260,16 @@ pub fn auth_of(j: json.Json) -> Result<Auth, string> {
             token: jsonv.get_str(j, "token"),
             key: jsonv.get_str(j, "key"),
             value: jsonv.get_str(j, "value"),
-            add_to: add_to
+            add_to: add_to,
+            grant: grant,
+            auth_url: jsonv.get_str(j, "auth_url"),
+            token_url: jsonv.get_str(j, "token_url"),
+            client_id: jsonv.get_str(j, "client_id"),
+            client_secret: jsonv.get_str(j, "client_secret"),
+            scope: jsonv.get_str(j, "scope"),
+            redirect_uri: jsonv.get_str(j, "redirect_uri"),
+            pkce: jsonv.get_bool(j, "pkce", true),
+            client_auth: client_auth
         }
     )
 }

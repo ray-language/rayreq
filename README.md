@@ -6,7 +6,7 @@ folders, saved requests, a response viewer and per-request history. Its model is
 
 ```sh
 make run        # open the app
-make test       # 142 tests: URLs, sending, the store, variables, auth, cookies, cURL, OpenAPI…
+make test       # 155 tests: URLs, sending, the store, variables, auth, cookies, cURL, OpenAPI…
 make check      # the real page driven through a send against a local server
 make            # every target
 ```
@@ -44,6 +44,15 @@ make            # every target
   {{token}}`), the tab says where an inherited auth comes from, a header written by hand with
   the same name wins, and credentials (an API key header too) never follow a redirect to
   another origin.
+- **OAuth 2** as one more auth type, on a request or a folder: authorization code with PKCE
+  (the system browser opens the sign-in and comes back to a loopback address RayReq listens
+  on, `http://127.0.0.1:<port>/…`, any free port by default), client credentials and password.
+  "Get new token" in the Auth tab runs the grant; a send with no valid token gets one by
+  itself when it can (refreshing an expired token, or a grant without a browser), and fails
+  before leaving otherwise. Tokens are kept apart from the requests, per environment and per
+  request or folder, and only for the settings they were got with (another token URL, client
+  or scope needs a new one); the page only ever sees a glimpse of them. The client secret and
+  the rest take `{{variables}}`.
 - **Cookie jar**, one per environment: cookies set by a response (a login's redirect included)
   go with the next hops and the next sends, by the rules browsers use (domain and host-only,
   path, Secure, Max-Age/Expires capped at 400 days, `__Secure-`/`__Host-`); a cookie the rules
@@ -81,7 +90,8 @@ make            # every target
 The rules for variables, and the rikuest bugs they come from, are in
 [docs/VARIABLES.md](docs/VARIABLES.md).
 
-Not yet: OAuth 2 flows, multipart bodies, assertions on responses (the runner judges by status).
+Not yet: multipart bodies, assertions on responses (the runner judges by status), OAuth 2's
+device and implicit grants.
 
 ## How it is built
 
@@ -92,6 +102,7 @@ src/exec.ray       prepare a request and run the exchange (redirects, timeout, H
 src/urls.ray       URL parsing, percent-encoding without double encoding, Location resolution
 src/vars.ray       {{variables}}: the precedence chain (folders → environment) and substitution
 src/auth.ray       which auth applies (own or inherited) and the header/parameter it adds
+src/oauth.ray      OAuth 2: PKCE, the loopback redirect, the token endpoint, refresh
 src/cookies.ray    the cookie jar's rules (RFC 6265): Set-Cookie in, Cookie header out
 src/curl.ray       curl commands: bash word splitting, options → request, send → command
 src/runner.ray     the runner's plan: a folder's requests in the tree's order
@@ -132,7 +143,9 @@ The database lives in `~/Library/Application Support/RayReq/rayreq.db` (macOS),
   which HEAD needs, gives the headers as a map).
 - There is no public-suffix list: a cookie for a one-label domain (`com`) is refused, but one
   for `co.uk` from `a.co.uk` is accepted.
-- Passwords, tokens, cookies and variable values are stored as plain text in the local database, and the
+- OAuth 2 redirect URIs must be loopback addresses (RFC 8252): a server that only accepts an
+  `https://` redirect cannot be used with the code flow.
+- Passwords, tokens (OAuth 2 ones too), cookies and variable values are stored as plain text in the local database, and the
   history keeps the headers as sent (Authorization included), like the request view shows them.
 
 What raylang, net, db and ray-elements made hard is recorded in

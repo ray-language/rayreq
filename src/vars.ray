@@ -255,13 +255,7 @@ pub fn resolve_request(r: model.Request, vars: [Var]) -> (model.Request, [string
 
 /// The fields of the auth's kind with their variables replaced (the others stay as they are).
 fn expand_auth(a: model.Auth, values: Map<string, string>) -> (model.Auth, [string]) {
-    var out = model.auth_of_kind(a.kind);
-    out.username = a.username;
-    out.password = a.password;
-    out.token = a.token;
-    out.key = a.key;
-    out.value = a.value;
-    out.add_to = a.add_to;
+    var out = a.clone();
     var missing: [string] = [];
     if (a.kind == "basic") {
         let (u, mu) = expand(a.username, values);
@@ -279,6 +273,31 @@ fn expand_auth(a: model.Auth, values: Map<string, string>) -> (model.Auth, [stri
         out.key = k;
         out.value = v;
         missing = add_missing(mk, mv);
+    } else if (a.kind == "oauth2") {
+        // Every field the grant uses; the others are left as written.
+        var fields = [a.token_url, a.client_id, a.client_secret, a.scope];
+        if (a.grant == "authorization_code") {
+            fields = fields + [a.auth_url, a.redirect_uri];
+        } else if (a.grant == "password") {
+            fields = fields + [a.username, a.password];
+        }
+        var done: [string] = [];
+        for f in fields {
+            let (x, m) = expand(f, values);
+            done.push(x);
+            missing = add_missing(missing, m);
+        }
+        out.token_url = done[0];
+        out.client_id = done[1];
+        out.client_secret = done[2];
+        out.scope = done[3];
+        if (a.grant == "authorization_code") {
+            out.auth_url = done[4];
+            out.redirect_uri = done[5];
+        } else if (a.grant == "password") {
+            out.username = done[4];
+            out.password = done[5];
+        }
     }
     (out, missing)
 }

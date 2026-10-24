@@ -21,6 +21,10 @@
 //!                                              (read and converted in a fiber)
 //!   runner.plan {project_id, folder_id}     → {name, steps: [{id, name, method, path}]}: what a
 //!                                              run sends, in order (the page sends each one)
+//!   oauth.status {request | project_id, folder_id, auth} → the token the auth would send
+//!   oauth.token {run, request | project_id, folder_id, auth} → the same, after getting a new
+//!                                              token (in a fiber; the code flow opens the browser)
+//!   oauth.cancel {run} · oauth.clear {request | project_id, folder_id, auth}
 //!   variables {project_id, folder_id | request} → {environment, variables, missing, url, auth}
 //!   tree {project_id}                        → {folders, requests}
 //!   folders.create {project_id, parent_id, name} · folders.rename {id, name}
@@ -46,6 +50,7 @@ import curl;
 import exec;
 import jsonv;
 import model;
+import oauth;
 import openapi;
 import runner;
 import store;
@@ -76,6 +81,27 @@ pub struct Job {
     environment: string,
     captures: [model.Pair],
     unresolved: [string],
+    /// An OAuth 2 token to get (or refresh) before sending; the fiber does it.
+    oauth: Option<OAuthFetch>,
+    /// The token the fiber got: `finish` keeps it.
+    token: Option<oauth.Token>,
+}
+
+/// An OAuth 2 token a send needs and can get without the user.
+pub struct OAuthFetch {
+    /// The resolved settings.
+    auth: model.Auth,
+    owner: string,
+    stored: Option<oauth.Token>,
+}
+
+/// Getting a token for the page ("Get new token"); the main loop opens the browser for the
+/// code flow.
+pub struct OAuthJob {
+    run: int,
+    environment_id: int,
+    owner: string,
+    auth: model.Auth,
 }
 
 pub enum Action {
@@ -92,6 +118,10 @@ pub enum Action {
     Clipboard(string),
     /// Read and convert an API description in a fiber, then `store_spec`.
     ImportSpec(SpecJob),
+    /// Get an OAuth 2 token (the code flow opens the browser first), then `keep_token`.
+    OAuth(OAuthJob),
+    /// Stop waiting for the browser of the token request `run`, then answer this request.
+    OAuthCancel(int),
     Quit,
 }
 
@@ -172,6 +202,111 @@ fn add_imported(
     x.project_id = project_id;
     x.folder_id = folder_id;
     store.create_request(s, x)
+}
+
+// ---- OAuth 2 tokens for the page -----------------------------------------------------------
+
+/// Whose token the page asks about, with the settings resolved: a request's effective auth
+/// (its own or inherited: then the folder's token), or a folder's auth as edited in its dialog.
+struct OAuthTarget {
+    environment_id: int,
+    environment: string,
+    owner: string,
+    auth: model.Auth,
+    missing: [string],
+    from: string,
+    source: string,
+}
+
+fn oauth_target(s: store.Store, req: json.Json) -> Result<OAuthTarget, string> {
+    let (sc, owner, a, from, source) = if let Option.Some(j) = json.member(req, "request") {
+        let r = model.request_of(j)?;
+        let (project_id, folder_id) = vars.location(s, r)?;
+        let eff = auth.effective(s, r, folder_id)?;
+        if (eff.auth.kind != "oauth2") {
+            return Result.Err("this request does not use OAuth 2");
+        }
+        if (eff.owner == "request:0") {
+            return Result.Err("OAuth 2: save the request before getting a token for it");
+        }
+        (vars.scope(s, project_id, folder_id)?, eff.owner, eff.auth, eff.from, eff.source)
+    } else {
+        let folder_id = jsonv.need_int(req, "folder_id")?;
+        let f = store.get_folder(s, folder_id)?;
+        let a = model.auth_of(jsonv.need_obj(req, "auth")?)?;
+        if (a.kind != "oauth2") {
+            return Result.Err("this folder does not use OAuth 2");
+        }
+        (vars.scope(s, f.project_id, folder_id)?, store.owner_of(folder_id, 0), a, "folder", f.name)
+    };
+    // The settings resolved like a send's (the same resolver), on a request that has nothing else.
+    var carrier = model.new_request(0, 0, "");
+    carrier.auth = a;
+    let (resolved, missing) = vars.resolve_request(carrier, sc.vars);
+    Result.Ok(
+        OAuthTarget {
+            environment_id: sc.environment_id,
+            environment: sc.environment,
+            owner: owner,
+            auth: resolved.auth,
+            missing: missing,
+            from: from,
+            source: source
+        }
+    )
+}
+
+fn oauth_status(s: store.Store, x: OAuthTarget) -> Result<json.Json, string> {
+    let stored = store.get_token(s, x.environment_id, x.owner)?;
+    let token = match (stored) {
+        Option.Some(t) => oauth.token_info(t, x.auth, time.now()),
+        Option.None => jsonv.obj([("has_token", jsonv.flag(false))]),
+    };
+    Result.Ok(
+        jsonv.obj(
+            [
+                ("environment", jsonv.str(x.environment)),
+                ("from", jsonv.str(x.from)),
+                ("source", jsonv.str(x.source)),
+                ("grant", jsonv.str(x.auth.grant)),
+                ("missing", jsonv.strs(x.missing)),
+                ("token", token),
+                ("automatic", jsonv.flag(oauth.can_fetch(x.auth, stored)))
+            ]
+        )
+    )
+}
+
+fn oauth_job(s: store.Store, req: json.Json) -> Result<OAuthJob, string> {
+    let x = oauth_target(s, req)?;
+    if (x.missing.len() > 0) {
+        return Result.Err("OAuth 2: not defined: ${x.missing.join(", ")}");
+    }
+    Result.Ok(
+        OAuthJob {
+            run: jsonv.need_int(req, "run")?,
+            environment_id: x.environment_id,
+            owner: x.owner,
+            auth: x.auth
+        }
+    )
+}
+
+/// The fiber's part of "Get new token" for the grants without a browser.
+pub fn obtain(job: OAuthJob) -> Result<oauth.Token, string> {
+    oauth.request_token(job.auth, oauth.grant_fields(job.auth)?, "")
+}
+
+/// Keeps the token the fiber got and answers with its status.
+pub fn keep_token(s: store.Store, job: OAuthJob, got: Result<oauth.Token, string>) -> string {
+    let t = match (got) {
+        Result.Ok(t) => t,
+        Result.Err(e) => return fail(e),
+    };
+    if let Result.Err(e) = store.save_token(s, job.environment_id, job.owner, t) {
+        return fail(e);
+    }
+    ok(oauth.token_info(t, job.auth, time.now()))
 }
 
 fn spec_job(s: store.Store, req: json.Json) -> Result<SpecJob, string> {
@@ -322,6 +457,15 @@ pub fn history_item(o: exec.Outcome) -> store.HistoryItem {
 /// A finished send: runs its captures, stores it in the request's history (when it has one)
 /// and renders the reply.
 pub fn finish(s: store.Store, job: Job, o: exec.Outcome) -> string {
+    var oauth_note = "";
+    if let Option.Some(t) = job.token {
+        if let Option.Some(f) = job.oauth {
+            match (store.save_token(s, job.environment_id, f.owner, t)) {
+                Result.Ok(_) => oauth_note = "obtained",
+                Result.Err(e) => oauth_note = "the token could not be kept: ${e}",
+            }
+        }
+    }
     let captured = captures.apply(s, job.environment_id, job.captures, o);
     let (stored, ignored) = keep_cookies(s, job, o);
     var history_id = 0;
@@ -341,7 +485,8 @@ pub fn finish(s: store.Store, job: Job, o: exec.Outcome) -> string {
                 ("captures", captures.captured_json(captured)),
                 ("environment", jsonv.str(job.environment)),
                 ("cookies_stored", jsonv.num(stored)),
-                ("cookies_ignored", jsonv.strs(ignored))
+                ("cookies_ignored", jsonv.strs(ignored)),
+                ("oauth", jsonv.str(oauth_note))
             ]
         )
     )
@@ -432,6 +577,9 @@ struct Plan {
     request: model.Request,
     credentials: [string],
     missing: [string],
+    /// OAuth 2: a token to get before the send, or why the send cannot have one ("" = fine).
+    oauth: Option<OAuthFetch>,
+    oauth_blocked: string,
 }
 
 fn plan(s: store.Store, r: model.Request) -> Result<Plan, string> {
@@ -442,10 +590,90 @@ fn plan(s: store.Store, r: model.Request) -> Result<Plan, string> {
     var with_auth = r.clone();
     with_auth.auth = eff.auth;
     let (resolved, missing) = vars.resolve_request(with_auth, sc.vars);
-    let (applied, credentials) = auth.apply(resolved)?;
+    var to_apply = resolved;
+    var fetch: Option<OAuthFetch> = Option.None;
+    var blocked = "";
+    if (eff.auth.kind == "oauth2") {
+        // The token is kept apart; the request only gets its header (a hand-written
+        // Authorization wins, as for the other kinds).
+        let settings = resolved.auth;
+        to_apply = resolved.clone();
+        to_apply.auth = model.auth_of_kind("none");
+        let stored = if (eff.owner == "request:0") {
+            Option.None
+        } else {
+            store.get_token(s, sc.environment_id, eff.owner)?
+        };
+        let now = time.now();
+        let ready = match (stored) {
+            Option.Some(t) => if (oauth.usable(t, settings, now)) {
+                Option.Some(t)
+            } else {
+                Option.None
+            },
+            Option.None => Option.None,
+        };
+        match (ready) {
+            Option.Some(t) => {
+                to_apply.headers = with_header(resolved.headers, "Authorization", oauth.header(t));
+            },
+            Option.None => {
+                if (eff.owner == "request:0") {
+                    blocked = "OAuth 2: save the request before getting a token for it";
+                } else if (oauth.can_fetch(settings, stored)) {
+                    fetch = Option.Some(
+                        OAuthFetch { auth: settings, owner: eff.owner, stored: stored }
+                    );
+                } else {
+                    blocked = "OAuth 2: no token yet (or it expired): get one in the Auth tab";
+                }
+            },
+        }
+    }
+    let (applied, credentials) = auth.apply(to_apply)?;
     Result.Ok(
-        Plan { scope: sc, auth: eff, request: applied, credentials: credentials, missing: missing }
+        Plan {
+            scope: sc,
+            auth: eff,
+            request: applied,
+            credentials: credentials,
+            missing: missing,
+            oauth: fetch,
+            oauth_blocked: blocked
+        }
     )
+}
+
+/// `headers` plus `name: value`, unless an enabled row already sets `name`.
+fn with_header(headers: [model.Pair], name: string, value: string) -> [model.Pair] {
+    for h in headers {
+        if (h.enabled && h.key.trim().to_lower() == name.to_lower()) {
+            return headers;
+        }
+    }
+    headers + [model.Pair { key: name, value: value, enabled: true }]
+}
+
+/// The fiber's part of a send: the OAuth 2 token first when one is needed, then the exchange.
+/// The job comes back with the token it got, for `finish` to keep.
+pub fn execute(job: Job) -> (Job, exec.Outcome) {
+    var j = job;
+    if let Option.Some(f) = job.oauth {
+        match (oauth.fetch(f.auth, f.stored)) {
+            Result.Ok(t) => {
+                j.token = Option.Some(t);
+                var p = j.prepared;
+                let names = p.headers.map(fn(h: (string, string)) -> string { h.0.to_lower() });
+                if (!names.contains("authorization")) {
+                    p.headers = p.headers + [("Authorization", oauth.header(t))];
+                }
+                j.prepared = p;
+            },
+            Result.Err(e) => return (j, exec.not_sent(j.prepared, e)),
+        }
+    }
+    let o = exec.run(j.prepared);
+    (j, o)
 }
 
 fn effective_auth_json(e: auth.Effective) -> json.Json {
@@ -522,6 +750,9 @@ fn prepare_send(s: store.Store, req: json.Json) -> Result<Job, string> {
     if (missing.len() > 0 && blocks_unresolved(s)?) {
         return Result.Err("unresolved variables: ${names}");
     }
+    if (p.oauth_blocked != "") {
+        return Result.Err(p.oauth_blocked);
+    }
     var prepared = match (exec.prepare(p.request)) {
         Result.Ok(prep) => prep,
         Result.Err(e) => return Result.Err(if (missing.len() > 0) { "${e} (unresolved variables: ${names})" } else { e }),
@@ -539,7 +770,9 @@ fn prepare_send(s: store.Store, req: json.Json) -> Result<Job, string> {
             environment_id: p.scope.environment_id,
             environment: p.scope.environment,
             captures: r.captures,
-            unresolved: missing
+            unresolved: missing,
+            oauth: p.oauth,
+            token: Option.None
         }
     )
 }
@@ -594,6 +827,13 @@ fn dispatch(s: store.Store, req: json.Json, op: string) -> Result<Action, string
             )
         },
         "openapi.import" => return Result.Ok(Action.ImportSpec(spec_job(s, req)?)),
+        "oauth.status" => oauth_status(s, oauth_target(s, req)?)?,
+        "oauth.token" => return Result.Ok(Action.OAuth(oauth_job(s, req)?)),
+        "oauth.cancel" => return Result.Ok(Action.OAuthCancel(jsonv.need_int(req, "run")?)),
+        "oauth.clear" => {
+            let x = oauth_target(s, req)?;
+            jsonv.num(store.delete_token(s, x.environment_id, x.owner)?)
+        },
         "curl.export" => curl_export(s, model.request_of(jsonv.need_obj(req, "request")?)?)?,
         "cookies.list" => {
             store.get_environment(s, jsonv.need_int(req, "environment_id")?)?;

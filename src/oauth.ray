@@ -1,0 +1,526 @@
+//! OAuth 2 (RFC 6749): getting an access token for the `oauth2` auth, and keeping it fresh.
+//!
+//! - authorization_code with PKCE (RFC 7636) for a native app (RFC 8252): the system browser
+//!   opens the authorization URL, the server sends it back to a loopback address this module
+//!   listens on (`http://127.0.0.1:<port>/…`), and the code is exchanged for a token.
+//! - client_credentials and password: one POST to the token endpoint.
+//! - refresh_token: when a stored token has expired and the server gave a refresh token.
+//!
+//! The token never goes into the request (a template): the store keeps it apart, per
+//! environment and per owner (the request or folder whose auth it is). A token belongs to the
+//! settings it was obtained with (`fingerprint`): change the token URL, the client or the scope,
+//! and it is no longer used.
+
+import std/base64;
+import std/crypto;
+import std/json;
+import std/net;
+import std/time;
+import std/url;
+import exec;
+import model;
+import urls;
+
+pub struct Token {
+    access_token: string,
+    /// As the server named it; sent as "Bearer" (RFC 6750) unless it says otherwise.
+    token_type: string,
+    refresh_token: string,
+    /// ms since the epoch; 0 = the server did not say.
+    expires_at: int,
+    scope: string,
+    obtained_at: int,
+    /// The settings it was obtained with.
+    config: string,
+}
+
+/// A token this close to its expiry is treated as expired (the send would race it).
+pub const EXPIRY_MARGIN_MS: int = 30000;
+
+const TOKEN_TIMEOUT_MS: int = 30000;
+
+/// How long the browser has to come back with the code.
+pub const CODE_TIMEOUT_MS: int = 5 * 60 * 1000;
+
+/// What a token was obtained for: the server, the client, the scope and the grant.
+pub fn fingerprint(a: model.Auth) -> string {
+    [a.grant, a.token_url.trim(), a.client_id.trim(), a.scope.trim()].join("\n")
+}
+
+/// Whether `t` can be sent now for the settings `a`.
+pub fn usable(t: Token, a: model.Auth, now: int) -> bool {
+    t.config == fingerprint(a)
+        && t.access_token != ""
+        && (t.expires_at == 0 || t.expires_at > now + EXPIRY_MARGIN_MS)
+}
+
+/// Whether a token for `a` can be had without the user: by refreshing `stored`, or by a grant
+/// that needs no browser.
+pub fn can_fetch(a: model.Auth, stored: Option<Token>) -> bool {
+    if let Option.Some(t) = stored {
+        if (t.config == fingerprint(a) && t.refresh_token != "") {
+            return true;
+        }
+    }
+    a.grant == "client_credentials" || a.grant == "password"
+}
+
+/// The Authorization header value.
+pub fn header(t: Token) -> string {
+    let kind = if (t.token_type == "" || t.token_type.to_lower() == "bearer") {
+        "Bearer"
+    } else {
+        t.token_type
+    };
+    "${kind} ${t.access_token}"
+}
+
+// ---- checks --------------------------------------------------------------------------------
+
+fn need(value: string, what: string) -> Result<string, string> {
+    let v = value.trim();
+    if (v == "") {
+        return Result.Err("OAuth 2: the ${what} is empty");
+    }
+    Result.Ok(v)
+}
+
+fn need_url(value: string, what: string) -> Result<string, string> {
+    let v = need(value, what)?;
+    match (urls.parse(v)) {
+        Result.Ok(_) => Result.Ok(v),
+        Result.Err(e) => Result.Err("OAuth 2: the ${what} is not a URL (${e})"),
+    }
+}
+
+// ---- PKCE ----------------------------------------------------------------------------------
+
+/// The S256 challenge of a verifier (RFC 7636 §4.2).
+pub fn challenge(verifier: string) -> string {
+    base64.base64url(crypto.sha256(verifier.to_bytes()))
+}
+
+/// A fresh verifier: 32 random bytes, base64url (43 characters).
+pub fn new_verifier() -> string {
+    base64.base64url(crypto.random_bytes(32))
+}
+
+// ---- the authorization request -------------------------------------------------------------
+
+/// Where the browser comes back: host, port (0 = any free one) and path of a loopback URL.
+pub struct Loopback {
+    host: string,
+    port: int,
+    path: string,
+}
+
+/// The redirect URI as a loopback address; anything else cannot reach this app.
+pub fn loopback(redirect_uri: string) -> Result<Loopback, string> {
+    let raw = if (redirect_uri.trim() == "") {
+        "http://127.0.0.1/callback"
+    } else {
+        redirect_uri.trim()
+    };
+    let bad = "OAuth 2: the redirect URI must be a loopback address this app listens on, like http://127.0.0.1:8765/callback (it is '${raw}')";
+    if (!raw.starts_with("http://")) {
+        return Result.Err(bad);
+    }
+    let rest = raw.substring(7, raw.len());
+    let slash = rest.index_of("/").unwrap_or(rest.len());
+    let authority = rest.substring(0, slash);
+    var path = rest.substring(slash, rest.len()).split("?")[0].split("#")[0];
+    if (path == "") {
+        path = "/";
+    }
+    let (host, port) = match (authority.last_index_of(":")) {
+        Option.Some(i) if !authority.ends_with("]") => {
+            match (parse_int(authority.substring(i + 1, authority.len()))) {
+                Option.Some(p) if p > 0 && p < 65536 => (authority.substring(0, i), p),
+                _ => return Result.Err(bad),
+            }
+        },
+        _ => (authority, 0),
+    };
+    if (!["127.0.0.1", "localhost", "[::1]"].contains(host)) {
+        return Result.Err(bad);
+    }
+    Result.Ok(Loopback { host: host, port: port, path: path })
+}
+
+fn loopback_url(l: Loopback, port: int) -> string {
+    "http://${l.host}:${port}${l.path}"
+}
+
+/// The authorization URL the browser opens (RFC 6749 §4.1.1, RFC 7636 §4.3).
+pub fn authorize_url(
+    a: model.Auth,
+    redirect: string,
+    state: string,
+    verifier: string
+) -> Result<string, string> {
+    let base = need_url(a.auth_url, "authorization URL")?;
+    var params: [(string, string)] = [
+        ("response_type", "code"),
+        ("client_id", need(a.client_id, "client ID")?),
+        ("redirect_uri", redirect),
+        ("state", state)
+    ];
+    if (a.scope.trim() != "") {
+        params.push(("scope", a.scope.trim()));
+    }
+    if (a.pkce) {
+        params.push(("code_challenge", challenge(verifier)));
+        params.push(("code_challenge_method", "S256"));
+    }
+    let query = params
+        .map(fn(p: (string, string)) -> string { url.url_encode(p.0) + "=" + url.url_encode(p.1) })
+        .join("&");
+    let sep = if (base.contains("?")) { "&" } else { "?" };
+    Result.Ok(base + sep + query)
+}
+
+/// A login in progress: the listener the browser comes back to, and what checks its answer.
+pub struct Pending {
+    listener: int,
+    redirect: string,
+    path: string,
+    state: string,
+    verifier: string,
+    url: string,
+}
+
+/// Listens on the loopback address and builds the authorization URL. The caller opens `url` in
+/// the browser, then calls `wait_code`.
+pub fn begin(a: model.Auth) -> Result<Pending, string> {
+    let l = loopback(a.redirect_uri)?;
+    need_url(a.token_url, "token URL")?;
+    let listener = match (net.tcp_listen("127.0.0.1", l.port)) {
+        Result.Ok(h) => h,
+        Result.Err(e) => return Result.Err("OAuth 2: cannot listen on port ${l.port} for the redirect: ${e}"),
+    };
+    let redirect = loopback_url(l, net.local_port(listener));
+    let state = base64.base64url(crypto.random_bytes(16));
+    let verifier = new_verifier();
+    let u = authorize_url(a, redirect, state, verifier)?;
+    Result.Ok(
+        Pending {
+            listener: listener,
+            redirect: redirect,
+            path: l.path,
+            state: state,
+            verifier: verifier,
+            url: u
+        }
+    )
+}
+
+/// What came back to the loopback address.
+pub enum Callback {
+    /// Not the callback (a favicon, another path): answer and keep waiting.
+    Other,
+    Code(string),
+    Denied(string),
+}
+
+/// Reads the request target of the browser's visit (`GET /callback?code=…&state=… HTTP/1.1`).
+pub fn read_callback(target: string, path: string, state: string) -> Result<Callback, string> {
+    let (p, q) = match (target.index_of("?")) {
+        Option.Some(i) => (target.substring(0, i), target.substring(i + 1, target.len())),
+        Option.None => (target, ""),
+    };
+    if (p != path) {
+        return Result.Ok(Callback.Other);
+    }
+    var params: Map<string, string> = Map.new();
+    for part in q.split("&") {
+        let kv = part.split("=");
+        let k = url.url_decode(kv[0].replace("+", " ")).unwrap_or(kv[0]);
+        let v = if (kv.len() > 1) {
+            url.url_decode(kv[1].replace("+", " ")).unwrap_or(kv[1])
+        } else {
+            ""
+        };
+        params.insert(k, v);
+    }
+    if (params.get_or("state", "") != state) {
+        return Result.Err(
+            "OAuth 2: the answer's state does not match the request (a forged or stale redirect)"
+        );
+    }
+    if let Option.Some(e) = params.get("error") {
+        let why = params.get_or("error_description", "");
+        return Result.Ok(Callback.Denied(if (why == "") { e } else { "${e}: ${why}" }));
+    }
+    match (params.get("code")) {
+        Option.Some(c) => if (c == "") {
+            Result.Err("OAuth 2: the redirect has an empty code")
+        } else {
+            Result.Ok(Callback.Code(c))
+        },
+        Option.None => Result.Err("OAuth 2: the redirect has no code"),
+    }
+}
+
+fn page(title: string, text: string) -> string {
+    let body = "<!doctype html><meta charset=utf-8><title>RayReq</title><body style=\"font:16px system-ui;margin:3rem\"><h1 style=\"font-size:1.3rem\">${title}</h1><p>${text}</p>";
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${body.to_bytes().len()}\r\nConnection: close\r\n\r\n${body}"
+}
+
+/// One visit to the listener: its request target ("" when it sent nothing readable).
+fn visit(conn: int) -> string {
+    net.set_read_timeout(conn, 5000);
+    var got = b"";
+    while (got.index_of(b"\r\n").is_none() && got.len() < 16384) {
+        match (net.socket_read_bytes(conn)) {
+            Result.Ok(chunk) => {
+                if (chunk.len() == 0) {
+                    break;
+                }
+                got = got + chunk;
+            },
+            Result.Err(_) => break,
+        }
+    }
+    let line = from_utf8(got).unwrap_or("").split("\r\n")[0];
+    let parts = line.split(" ");
+    if (parts.len() < 2) { "" } else { parts[1] }
+}
+
+/// Waits for the browser to come back with the code, until `deadline` (ms) or until `cancel`
+/// gets a value. The listener is closed when it returns.
+pub fn wait_code(p: Pending, deadline: int, cancel: Channel<bool>) -> Result<string, string> {
+    net.set_read_timeout(p.listener, 250);
+    let result = loop_code(p, deadline, cancel);
+    close(p.listener);
+    result
+}
+
+fn loop_code(p: Pending, deadline: int, cancel: Channel<bool>) -> Result<string, string> {
+    while (true) {
+        match (try_recv(cancel)) {
+            Received.Got(_) => return Result.Err("OAuth 2: cancelled"),
+            Received.Closed => return Result.Err("OAuth 2: cancelled"),
+            Received.Empty => { },
+        }
+        if (time.now() > deadline) {
+            return Result.Err("OAuth 2: the browser did not come back in time");
+        }
+        let conn = match (net.tcp_accept(p.listener)) {
+            Result.Ok(c) => c,
+            Result.Err(_) => continue,  // the poll's timeout
+        };
+        let target = visit(conn);
+        let answer = read_callback(target, p.path, p.state);
+        let reply = match (answer) {
+            Result.Ok(Callback.Code(_)) => page("Signed in", "RayReq has the authorization. You can close this tab."),
+            Result.Ok(Callback.Denied(why)) => page("Not authorized", "The server said: ${escape(why)}"),
+            Result.Ok(Callback.Other) => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            Result.Err(e) => page("Not accepted", escape(e)),
+        };
+        let _ = net.socket_write(conn, reply);
+        close(conn);
+        match (answer) {
+            Result.Ok(Callback.Code(code)) => return Result.Ok(code),
+            Result.Ok(Callback.Denied(why)) => return Result.Err("OAuth 2: authorization denied: ${why}"),
+            Result.Ok(Callback.Other) => { },
+            Result.Err(e) => return Result.Err(e),
+        }
+    }
+}
+
+fn escape(s: string) -> string {
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}
+
+// ---- the token endpoint --------------------------------------------------------------------
+
+/// The token request (RFC 6749 §2.3.1, §4.1.3, §4.3.2, §4.4.2, §6) as a request rayreq sends.
+pub fn token_request(a: model.Auth, fields: [(string, string)]) -> Result<model.Request, string> {
+    var r = model.new_request(0, 0, "token");
+    r.method = "POST";
+    r.url = need_url(a.token_url, "token URL")?;
+    r.body_type = "form";
+    r.follow_redirects = false;
+    r.timeout_ms = TOKEN_TIMEOUT_MS;
+    r.use_cookies = false;
+    r.auth = model.auth_of_kind("none");
+    let client_id = need(a.client_id, "client ID")?;
+    var form = fields.map(fn(f: (string, string)) -> model.Pair { model.Pair { key: f.0, value: f.1, enabled: true } });
+    r.headers = [model.Pair { key: "Accept", value: "application/json", enabled: true }];
+    if (a.client_auth == "body" || a.client_secret == "") {
+        // A public client (no secret) names itself in the body.
+        form.push(model.Pair { key: "client_id", value: client_id, enabled: true });
+        if (a.client_secret != "") {
+            form.push(model.Pair { key: "client_secret", value: a.client_secret, enabled: true });
+        }
+    } else {
+        // §2.3.1: both form-encoded before the Basic encoding.
+        let user = url.url_encode(client_id) + ":" + url.url_encode(a.client_secret);
+        r.headers.push(
+            model.Pair {
+                key: "Authorization",
+                value: "Basic " + base64.base64(user.to_bytes()),
+                enabled: true
+            }
+        );
+    }
+    r.form = form;
+    Result.Ok(r)
+}
+
+/// The fields of a grant that needs no browser.
+pub fn grant_fields(a: model.Auth) -> Result<[(string, string)], string> {
+    var fields: [(string, string)] = [];
+    if (a.grant == "client_credentials") {
+        fields.push(("grant_type", "client_credentials"));
+    } else if (a.grant == "password") {
+        fields.push(("grant_type", "password"));
+        fields.push(("username", need(a.username, "user name")?));
+        fields.push(("password", a.password));
+    } else {
+        return Result.Err("OAuth 2: this grant needs the browser: get a token in the Auth tab");
+    }
+    if (a.scope.trim() != "") {
+        fields.push(("scope", a.scope.trim()));
+    }
+    Result.Ok(fields)
+}
+
+pub fn code_fields(
+    code: string,
+    redirect: string,
+    verifier: string,
+    pkce: bool
+) -> [(string, string)] {
+    var fields = [("grant_type", "authorization_code"), ("code", code), ("redirect_uri", redirect)];
+    if (pkce) {
+        fields.push(("code_verifier", verifier));
+    }
+    fields
+}
+
+pub fn refresh_fields(a: model.Auth, refresh_token: string) -> [(string, string)] {
+    var fields = [("grant_type", "refresh_token"), ("refresh_token", refresh_token)];
+    if (a.scope.trim() != "") {
+        fields.push(("scope", a.scope.trim()));
+    }
+    fields
+}
+
+/// The token in a token endpoint's answer (RFC 6749 §5.1), or its error (§5.2). A refresh that
+/// brings no new refresh token keeps `previous_refresh` (§6).
+pub fn parse_token(
+    a: model.Auth,
+    status: int,
+    body: string,
+    now: int,
+    previous_refresh: string
+) -> Result<Token, string> {
+    let j = match (json.parse(body)) {
+        Result.Ok(j) => j,
+        Result.Err(_) => {
+            let shown = if (body.len() > 200) { body.substring(0, 200) + "…" } else { body };
+            return Result.Err(
+                "OAuth 2: the token endpoint answered ${status} without JSON: ${shown}"
+            );
+        },
+    };
+    if let Option.Some(e) = json.get_string(j, "error") {
+        let why = json.get_string(j, "error_description").unwrap_or("");
+        return Result.Err(
+            "OAuth 2: the token endpoint refused (${status}): ${e}"
+                + if (why == "") { "" } else { " — ${why}" }
+        );
+    }
+    if (status < 200 || status > 299) {
+        return Result.Err("OAuth 2: the token endpoint answered ${status}");
+    }
+    let access = json.get_string(j, "access_token").unwrap_or("");
+    if (access == "") {
+        return Result.Err("OAuth 2: the answer has no access_token");
+    }
+    // expires_in is a number, but some servers send it as a string.
+    let expires_in = match (json.get_float(j, "expires_in")) {
+        Option.Some(f) => f as int,
+        Option.None => parse_int(json.get_string(j, "expires_in").unwrap_or("")).unwrap_or(0),
+    };
+    // An empty refresh_token is no new one.
+    let given = json.get_string(j, "refresh_token").unwrap_or("");
+    let refresh = if (given == "") { previous_refresh } else { given };
+    Result.Ok(
+        Token {
+            access_token: access,
+            token_type: json.get_string(j, "token_type").unwrap_or("Bearer"),
+            refresh_token: refresh,
+            expires_at: if (expires_in > 0) { now + expires_in * 1000 } else { 0 },
+            scope: json.get_string(j, "scope").unwrap_or(a.scope.trim()),
+            obtained_at: now,
+            config: fingerprint(a)
+        }
+    )
+}
+
+/// Posts `fields` to the token endpoint.
+pub fn request_token(
+    a: model.Auth,
+    fields: [(string, string)],
+    previous_refresh: string
+) -> Result<Token, string> {
+    let p = exec.prepare(token_request(a, fields)?)?;
+    let o = exec.run(p);
+    if (!o.ok) {
+        return Result.Err("OAuth 2: the token endpoint could not be reached: ${o.error}");
+    }
+    parse_token(a, o.status, from_utf8(o.body).unwrap_or(""), time.now(), previous_refresh)
+}
+
+/// A token without the user, for a send: refresh `stored` when it can, else run a grant that
+/// needs no browser.
+pub fn fetch(a: model.Auth, stored: Option<Token>) -> Result<Token, string> {
+    if let Option.Some(t) = stored {
+        if (t.config == fingerprint(a) && t.refresh_token != "") {
+            match (request_token(a, refresh_fields(a, t.refresh_token), t.refresh_token)) {
+                Result.Ok(fresh) => return Result.Ok(fresh),
+                // A refused refresh (revoked, expired) falls back to the grant when it can.
+                Result.Err(e) => if (a.grant == "authorization_code") {
+                    return Result.Err("${e} (the refresh failed: get a new token in the Auth tab)");
+                },
+            }
+        }
+    }
+    request_token(a, grant_fields(a)?, "")
+}
+
+/// The authorization code flow after the browser was opened: wait for the code, exchange it.
+pub fn complete(a: model.Auth, p: Pending, cancel: Channel<bool>) -> Result<Token, string> {
+    let code = wait_code(p, time.now() + CODE_TIMEOUT_MS, cancel)?;
+    request_token(a, code_fields(code, p.redirect, p.verifier, a.pkce), "")
+}
+
+// ---- for the page --------------------------------------------------------------------------
+
+/// The page's view of a token: never the token itself, only enough to recognise it.
+pub fn token_info(t: Token, a: model.Auth, now: int) -> json.Json {
+    let shown = if (t.access_token.len() > 12) {
+        t.access_token.substring(0, 6)
+            + "…"
+            + t.access_token.substring(t.access_token.len() - 4, t.access_token.len())
+    } else {
+        "…"
+    };
+    json.Json.JObject(info_fields(t, a, now, shown))
+}
+
+fn info_fields(t: Token, a: model.Auth, now: int, shown: string) -> Map<string, json.Json> {
+    let m: Map<string, json.Json> = Map.new();
+    m.insert("has_token", json.Json.JBool(true));
+    m.insert("usable", json.Json.JBool(usable(t, a, now)));
+    m.insert("current", json.Json.JBool(t.config == fingerprint(a)));
+    m.insert("expires_at", json.Json.JNum(t.expires_at as float));
+    m.insert("obtained_at", json.Json.JNum(t.obtained_at as float));
+    m.insert("scope", json.Json.JStr(t.scope));
+    m.insert("token_type", json.Json.JStr(t.token_type));
+    m.insert("refreshable", json.Json.JBool(t.refresh_token != ""));
+    m.insert("preview", json.Json.JStr(shown));
+    m
+}
