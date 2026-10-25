@@ -151,18 +151,18 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 .pane-tabs::part(panels) { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--ray-space-sm); }
 
 .kv-row { display: grid; grid-template-columns: 1fr 1.4fr auto auto; gap: var(--ray-space-2); align-items: center; margin-block-end: var(--ray-space-1); }
-.kv-row ray-input::part(input) { font-family: var(--ray-font-mono); font-size: var(--ray-font-size-xs); }
-.kv-row.off ray-input { opacity: 0.55; }
+.kv-row ray-input::part(input), .kv-row rr-mode-input::part(input) { font-family: var(--ray-font-mono); font-size: var(--ray-font-size-xs); }
+.kv-row.off ray-input, .kv-row.off rr-mode-input { opacity: 0.55; }
 .kv { container-type: inline-size; }
-.kv-row > ray-input, .kv-row > ray-select, .kv-row > .part-value { min-width: 0; }
+.kv-row > ray-input, .kv-row > ray-select { min-width: 0; }
 /* ray-icon-button has no intrinsic width in WebKit (its inner button is flex: 1): an auto
    track would shrink it to nothing. Narrower than its xs square, so the row's checkbox and ×
    read as one pair of controls. */
 .kv-row > ray-icon-button { width: 1.5rem; }
 
-/* Assertions and multipart parts have more cells than a half pane holds: on one line when the
-   table is wide, else on two (what is checked or sent, then how), each row set off by a rule. */
-.kv-row.asserts, .kv-row.parts { row-gap: var(--ray-space-1); }
+/* Assertions have more cells than a half pane holds: on one line when the table is wide, else on
+   two (what is checked, then how), each row set off by a rule. */
+.kv-row.asserts { row-gap: var(--ray-space-1); }
 .kv-row.asserts {
   grid-template-columns: 8.5rem minmax(0, 1fr) auto auto;
   grid-template-areas: "source path box remove" "op expected . .";
@@ -171,17 +171,14 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 .kv-row.asserts > :nth-child(2) { grid-area: path; }
 .kv-row.asserts > :nth-child(3) { grid-area: op; }
 .kv-row.asserts > :nth-child(4) { grid-area: expected; }
-.kv-row.asserts > :nth-child(5), .kv-row.parts > :nth-child(5) { grid-area: box; }
-.kv-row.asserts > :nth-child(6), .kv-row.parts > :nth-child(6) { grid-area: remove; }
-.kv-row.parts {
-  grid-template-columns: minmax(0, 1fr) 10rem auto auto;
-  grid-template-areas: "key kind box remove" "value ctype . .";
-}
-.kv-row.parts > :nth-child(1) { grid-area: key; }
-.kv-row.parts > :nth-child(2) { grid-area: kind; }
-.kv-row.parts > :nth-child(3) { grid-area: value; }
-.kv-row.parts > :nth-child(4) { grid-area: ctype; }
-.kv-row.asserts + .kv-row.asserts, .kv-row.parts + .kv-row.parts {
+.kv-row.asserts > :nth-child(5) { grid-area: box; }
+.kv-row.asserts > :nth-child(6) { grid-area: remove; }
+/* A multipart part on one line: its name, its value (text or a file's path, the kind chosen in
+   the field itself) and an optional content type. */
+.kv-row.parts { grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr) minmax(0, 0.9fr) auto auto; }
+.kv-row.parts > rr-mode-input { min-width: 0; }
+.kv-row.parts rr-mode-input > ray-icon-button[slot="right"] { width: 1.5rem; }
+.kv-row.asserts + .kv-row.asserts {
   border-block-start: 1px solid var(--ray-border); padding-block-start: var(--ray-space-2); margin-block-start: var(--ray-space-1);
 }
 @container (min-width: 44rem) {
@@ -191,15 +188,6 @@ ray-theme-toggle::part(button) { border-color: transparent; }
   }
   .kv-row.asserts + .kv-row.asserts { border-block-start: 0; padding-block-start: 0; }
 }
-@container (min-width: 46rem) {
-  .kv-row.parts {
-    grid-template-columns: minmax(0, 1fr) 6.5rem minmax(0, 1.4fr) minmax(0, 0.8fr) auto auto;
-    grid-template-areas: "key kind value ctype box remove";
-  }
-  .kv-row.parts + .kv-row.parts { border-block-start: 0; padding-block-start: 0; }
-}
-.part-value { display: flex; gap: 2px; align-items: center; min-width: 0; }
-.part-value ray-input { flex: 1; min-width: 0; }
 /* The body's text fills the pane; the format button and a JSON error sit under it. */
 .body-panel { height: 100%; }
 .body-editor { height: 100%; }

@@ -7,6 +7,7 @@ import { getHost, hostCan } from "@raylang/elements";
 import { el } from "./util.js";
 import { t } from "./i18n.js";
 import { varField } from "./varfield.js";
+import "./mode-input.js";
 
 export class KvEditor {
   /// keyLabel / valueLabel: the i18n keys of the two columns ("kv.key", "kv.header", "kv.field",
@@ -52,13 +53,18 @@ export class KvEditor {
     this.onChange(this.value);
   }
 
+  /// The field for a row's value (a subclass may offer another kind of field).
+  valueElement() {
+    return el("ray-input", { size: "xs", placeholder: t(this.valueLabel), "aria-label": t(this.valueLabel), spellcheck: "false", autocapitalize: "off" });
+  }
+
   rowElement(row, isBlank = false) {
     const line = el("div", { class: "kv-row" + (row.enabled ? "" : " off") });
     const box = el("ray-checkbox", { size: "xs", "aria-label": t("kv.enabled") });
     box.checked = row.enabled;
     const key = el("ray-input", { size: "xs", placeholder: t(this.keyLabel), "aria-label": t(this.keyLabel), spellcheck: "false", autocapitalize: "off" });
     key.value = row.key;
-    const value = el("ray-input", { size: "xs", placeholder: t(this.valueLabel), "aria-label": t(this.valueLabel), spellcheck: "false", autocapitalize: "off" });
+    const value = this.valueElement(row);
     value.value = row.value;
     const remove = el("ray-icon-button", { size: "xs", variant: "subtle", color: "gray", label: t("kv.remove") }, el("ray-icon", { name: "close" }));
 
@@ -123,39 +129,49 @@ export class PartsEditor extends KvEditor {
     this.container.append(this.rowElement(blank, true));
   }
 
+  /// A part's value says what it is: text, or the path of a file (the mode on its right).
+  valueElement(row) {
+    const value = el("rr-mode-input", { size: "xs", display: "label", "menu-label": t("parts.kind"), spellcheck: "false", autocapitalize: "off" });
+    value.options = [
+      { value: "text", label: t("parts.text"), attrs: { placeholder: t("kv.value"), "aria-label": t("kv.value") } },
+      { value: "file", label: t("parts.file"), icon: "file", attrs: { placeholder: t("parts.path"), "aria-label": t("parts.path") } },
+    ];
+    value.mode = row.file ? "file" : "text";
+    return value;
+  }
+
   rowElement(row, isBlank = false) {
     const line = super.rowElement(row, isBlank);
     line.classList.add("parts");
     const [key, value, box, remove] = line.children;
-    const kind = el("ray-select", { size: "xs", "aria-label": t("parts.kind") });
-    kind.data = [{ value: "text", label: t("parts.text") }, { value: "file", label: t("parts.file") }];
-    kind.value = row.file ? "file" : "text";
-    const pick = el("ray-icon-button", { size: "sm", variant: "subtle", label: t("parts.choose") }, el("ray-icon", { name: "folder" }));
+    // Choosing a file from the system dialog, in the field's own right section.
+    const pick = el("ray-icon-button", { slot: "right", size: "xs", variant: "subtle", color: "gray", label: t("parts.choose") }, el("ray-icon", { name: "folder" }));
+    value.append(pick);
     const ctype = el("ray-input", { size: "xs", placeholder: t("parts.type"), "aria-label": t("parts.type"), spellcheck: "false", autocapitalize: "off" });
     ctype.value = row.content_type;
     if (this.variables) varField(ctype, this.variables);
     // A path's end (the file's name) is what tells it apart: shown when the field is not being
     // edited, the whole path on hover.
+    const toEnd = () => {
+      if (row.file && value.control && !value.matches(":focus-within")) value.control.scrollLeft = value.control.scrollWidth;
+    };
     const showEnd = () => {
       value.title = row.file ? row.value : "";
-      if (!row.file || value.matches(":focus-within")) return;
-      requestAnimationFrame(() => {
-        if (value.control) value.control.scrollLeft = value.control.scrollWidth;
-      });
+      requestAnimationFrame(toEnd);
     };
+    // A row is often built while its tab is hidden (no width yet): scroll once it has one.
+    new ResizeObserver(toEnd).observe(value);
     value.addEventListener("focusout", () => setTimeout(showEnd, 0));
     value.addEventListener("input", () => { value.title = row.file ? value.value : ""; });
     const showKind = () => {
       showEnd();
-      value.placeholder = t(row.file ? "parts.path" : "kv.value");
-      value.setAttribute("aria-label", value.placeholder);
       pick.hidden = !row.file || !hostCan("pick_files");
     };
     // Typing anything makes the blank row a real one: the base class watches key and value,
     // so the other cells go through a value input event.
     const touched = () => value.dispatchEvent(new Event("input"));
-    kind.addEventListener("change", () => {
-      row.file = kind.value === "file";
+    value.addEventListener("ray-mode-change", (e) => {
+      row.file = e.detail.mode === "file";
       showKind();
       this.changed();
     });
@@ -173,9 +189,8 @@ export class PartsEditor extends KvEditor {
     ctype.addEventListener("keydown", (e) => {
       if (e.key === "Enter") e.preventDefault();
     });
-    const cell = el("div", { class: "part-value" }, value, pick);
     showKind();
-    line.replaceChildren(key, kind, cell, ctype, box, remove);
+    line.replaceChildren(key, value, ctype, box, remove);
     return line;
   }
 }

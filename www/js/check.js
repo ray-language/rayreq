@@ -617,21 +617,30 @@ export async function run(port, sampleFile) {
     $("body-type").dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     await until(() => !$("parts").hidden, "the parts editor shows");
     const rowsOf = () => [...$("parts").querySelectorAll(".kv-row")];
-    const typeIn = (row, i, v) => type(row.querySelectorAll("ray-input")[i], v);
+    const typeIn = (row, i, v) => type(row.querySelectorAll("ray-input, rr-mode-input")[i], v);
     typeIn(rowsOf()[0], 0, "title");
     typeIn(rowsOf()[0], 1, "Hi {{base}}");
     const fileRow = rowsOf()[1];
     typeIn(fileRow, 0, "doc");
-    const kindSelect = fileRow.querySelector("ray-select");
-    kindSelect.value = "file";
-    kindSelect.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    // The value's own menu says what it is: choosing "File" changes the field, not another cell.
+    // (The row is the blank one just added: let it render first.)
+    await tick();
+    const valueField = fileRow.querySelector("rr-mode-input");
+    const trigger = valueField.shadowRoot.querySelector('[part="trigger"]');
+    expect(trigger.textContent.trim() === t("parts.text") && valueField.getAttribute("placeholder") === t("kv.value"), `text mode: ${trigger.textContent}`);
+    valueField.choose("file");
+    await tick();
+    expect(valueField.mode === "file" && trigger.textContent.trim() === t("parts.file") && valueField.getAttribute("placeholder") === t("parts.path"),
+      `file mode: ${trigger.textContent} / ${valueField.getAttribute("placeholder")}`);
+    expect(valueField.shadowRoot.querySelectorAll("ray-menu-item").length === 2
+      && valueField.shadowRoot.querySelector('ray-menu-item[aria-current="true"]').getAttribute("value") === "file", "the menu marks the current mode");
     typeIn(fileRow, 1, sampleFile);
     expect(tab5.draft.method === "GET" && tab5.draft.parts.length === 2 && tab5.draft.parts[1].file, `parts: ${JSON.stringify(tab5.draft.parts)}`);
     $("req-tabs").value = "body";
     await tick();
     fits($("parts"), "multipart parts");
     // A file part shows the end of its path (the file's name) once it is not being edited.
-    const pathField = fileRow.querySelectorAll("ray-input")[1];
+    const pathField = fileRow.querySelector("rr-mode-input");
     pathField.value = `/a/very/long/folder/that/goes/on/and/on/and/on/before/the/name/${"x".repeat(40)}/sample.txt`;
     pathField.dispatchEvent(new Event("focusout", { bubbles: true, composed: true }));
     await frames();
