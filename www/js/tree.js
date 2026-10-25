@@ -177,8 +177,10 @@ export function initTree() {
     if (node.kind === "request") renderTree();
   });
 
-  tree.addEventListener("contextmenu", (e) => {
-    // Runs before the menu opens (the menu listens on its trigger, our ancestor).
+  // The tree is the menu's own trigger, and a native menu reads its items inside its own
+  // contextmenu listener, registered before this one: fill them while the event is still
+  // capturing through the menu, an ancestor, so the right-clicked row's items are the ones read.
+  $("tree-menu").addEventListener("contextmenu", (e) => {
     menuTarget = nodeOf(e.target.closest(".tree-row"));
     if (menuTarget) {
       state.selected = menuTarget;
@@ -187,7 +189,7 @@ export function initTree() {
       }
     }
     fillMenu(menuTarget);
-  });
+  }, { capture: true });
   $("tree-menu").addEventListener("ray-select", (e) => runMenu(e.detail.value));
 
   tree.addEventListener("keydown", (e) => {

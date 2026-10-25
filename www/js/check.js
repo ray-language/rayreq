@@ -144,6 +144,20 @@ export async function run(port, sampleFile) {
     expect(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"][aria-expanded="true"]`), "folder row expanded");
     expect(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`).getAttribute("aria-level") === "2", "request nested under it");
 
+    // A right click reads the items of the row clicked, not those of the previous one.
+    const menu = $("tree-menu");
+    const read = [];
+    menu.popupNative = async () => {
+      read.push([...menu.querySelectorAll("ray-menu-item")].map((i) => i.getAttribute("value")));
+      return null;
+    };
+    const rightClick = (row) => row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true }));
+    rightClick(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`));
+    rightClick(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"]`));
+    delete menu.popupNative;
+    expect(read.length === 2 && read[0].includes("duplicate") && !read[0].includes("new-request"), `request menu: ${read[0]}`);
+    expect(read[1].includes("new-request") && !read[1].includes("duplicate"), `folder menu: ${read[1]}`);
+
     // Cancelling the dialog creates nothing.
     const cancelled = A.newFolder();
     await until(() => $("name-dialog").open, "the name dialog opened again");
