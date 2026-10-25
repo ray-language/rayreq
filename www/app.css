@@ -16,15 +16,20 @@ ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: col
 
 /* ---- sidebar -------------------------------------------------------------------------- */
 
-.side-head { display: grid; gap: var(--ray-space-xs); padding: var(--ray-space-xs) var(--ray-space-sm); }
+/* ray-sidebar pads its header, content and footer (space-2): ours add nothing, so the fields and
+   the rows of the tree share one left edge. */
+.side-head { display: grid; gap: var(--ray-space-2); }
 .project-row { flex-wrap: nowrap; }
-.side-foot { display: flex; gap: var(--ray-space-xs); align-items: center; padding: var(--ray-space-xs) var(--ray-space-sm); }
+.side-foot { display: flex; gap: var(--ray-space-2); align-items: center; }
 ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: none; }
 #tree-menu, #tree-menu > [slot="trigger"] { display: block; min-height: 100%; }
 
-.tree { padding: var(--ray-space-1) var(--ray-space-xs); min-height: 12rem; font-size: var(--ray-font-size-sm); outline: none; }
+.tree { min-height: 12rem; font-size: var(--ray-font-size-sm); outline: none; }
+/* A folder's chevron + icon and a request's method tag take the same width, so names at one
+   depth start at one x. */
+.tree { --tree-gap: 6px; --tree-chev: 14px; --tree-icon: 15px; }
 .tree-row {
-  display: flex; align-items: center; gap: var(--ray-space-xs);
+  display: flex; align-items: center; gap: var(--tree-gap);
   padding-block: 3px; padding-inline: calc(var(--depth, 0) * 14px + 6px) 6px;
   border-radius: var(--ray-radius-sm); cursor: default; user-select: none;
   color: var(--ray-foreground); white-space: nowrap;
@@ -34,13 +39,13 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 .tree-row[aria-selected="true"] { background: var(--ray-primary-light); color: var(--ray-primary-light-color); }
 .tree-row.drop-target { box-shadow: inset 0 0 0 2px var(--ray-primary); }
 .tree-row .name { overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
-.tree-row .chev { width: 14px; flex: none; color: var(--ray-muted-foreground); transition: transform 120ms; }
+.tree-row .chev { width: var(--tree-chev); flex: none; color: var(--ray-muted-foreground); transition: transform 120ms; }
 .tree-row[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .tree-row .folder-icon { color: var(--ray-muted-foreground); flex: none; }
 .tree-empty { padding: var(--ray-space-md); color: var(--ray-muted-foreground); font-size: var(--ray-font-size-sm); }
 
 .method-tag {
-  flex: none; width: 3.4em; font-family: var(--ray-font-mono); font-size: 10px; font-weight: 700;
+  flex: none; width: calc(var(--tree-chev) + var(--tree-gap) + var(--tree-icon)); font-family: var(--ray-font-mono); font-size: 10px; font-weight: 700;
   text-align: end; letter-spacing: 0.02em;
 }
 .m-GET { color: var(--ray-green-light-color); }
@@ -58,7 +63,7 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
   border-block-end: 1px solid var(--ray-border);
 }
 .top-actions { flex: none; flex-wrap: nowrap; }
-.tabstrip { display: flex; align-items: stretch; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; height: 100%; }
+.tabstrip { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; height: 100%; }
 .tabstrip::-webkit-scrollbar { display: none; }
 /* A tab bar wider than its room scrolls sideways (util.js sideScroller): the edge that hides
    tabs fades out. */
@@ -69,9 +74,11 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 [data-more-start] { --fade-start: 2.5rem; }
 [data-more-end] { --fade-end: 2.5rem; }
 .pane-tabs > ray-tab { padding-inline: var(--ray-space-3); }
+/* Tabs are no taller than the header's other controls, so opening the first one does not
+   change the header's height. */
 .tab {
-  display: flex; align-items: center; gap: var(--ray-space-xs); max-width: 14rem; flex: none;
-  padding-inline: var(--ray-space-sm) var(--ray-space-xs); margin-block: 6px;
+  display: flex; align-items: center; gap: var(--ray-space-2); max-width: 14rem; flex: none;
+  height: var(--ray-control-height-xs); padding-inline: var(--ray-space-3) var(--ray-space-1);
   border-radius: var(--ray-radius-sm); border: 1px solid transparent;
   font-size: var(--ray-font-size-xs); color: var(--ray-muted-foreground); cursor: default; background: none;
   font-family: inherit;
@@ -80,7 +87,8 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 .tab[aria-selected="true"] { background: var(--ray-card); border-color: var(--ray-border); color: var(--ray-foreground); }
 .tab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab .dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--ray-primary); flex: none; }
-.tab .close { flex: none; opacity: 0.6; }
+.tab .close { flex: none; }
+ray-theme-toggle::part(button) { border-color: transparent; }
 .tab:not(:hover):not([aria-selected="true"]) .close { visibility: hidden; }
 
 /* ---- workspace ------------------------------------------------------------------------- */
@@ -95,15 +103,15 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 .pane-tabs::part(panels) { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--ray-space-sm); }
 .request-pane { border-inline-end: 1px solid var(--ray-border); }
 
-.kv-row { display: grid; grid-template-columns: auto 1fr 1.4fr auto; gap: var(--ray-space-xs); align-items: center; margin-block-end: var(--ray-space-xs); }
+.kv-row { display: grid; grid-template-columns: auto 1fr 1.4fr auto; gap: var(--ray-space-2); align-items: center; margin-block-end: var(--ray-space-1); }
 .kv-row ray-input::part(input) { font-family: var(--ray-font-mono); font-size: var(--ray-font-size-xs); }
 .kv-row.off ray-input { opacity: 0.55; }
 .kv-row .spacer { width: 28px; }
 .kv { container-type: inline-size; }
 .kv-row > ray-input, .kv-row > ray-select, .kv-row > .part-value { min-width: 0; }
 /* ray-icon-button has no intrinsic width in WebKit (its inner button is flex: 1): an auto
-   track would shrink it to nothing. size="sm" is this square. */
-.kv-row > ray-icon-button { width: var(--ray-control-height-sm); }
+   track would shrink it to nothing. size="xs" is this square. */
+.kv-row > ray-icon-button { width: var(--ray-control-height-xs); }
 
 /* Assertions and multipart parts have more cells than a half pane holds: on one line when the
    table is wide, else on two (what is checked or sent, then how), each row set off by a rule. */
@@ -127,7 +135,7 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 .kv-row.parts > :nth-child(4) { grid-area: value; }
 .kv-row.parts > :nth-child(5) { grid-area: ctype; }
 .kv-row.asserts + .kv-row.asserts, .kv-row.parts + .kv-row.parts {
-  border-block-start: 1px solid var(--ray-border); padding-block-start: var(--ray-space-xs);
+  border-block-start: 1px solid var(--ray-border); padding-block-start: var(--ray-space-2); margin-block-start: var(--ray-space-1);
 }
 @container (min-width: 44rem) {
   .kv-row.asserts {
@@ -145,8 +153,18 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 }
 .part-value { display: flex; gap: 2px; align-items: center; min-width: 0; }
 .part-value ray-input { flex: 1; min-width: 0; }
+/* The body's text fills the pane; the format button and a JSON error sit under it. */
+.body-panel { height: 100%; }
+.body-editor { height: 100%; }
+#body { flex: 1 1 auto; min-height: 8rem; }
+#body::part(wrapper) { flex: 1 1 auto; }
+#body::part(textarea) { resize: none; }
+.body-type { align-self: flex-start; }
+.body-foot { display: flex; align-items: center; gap: var(--ray-space-2); }
+.body-foot #format-body { margin-inline-start: auto; }
+.body-foot:not(:has(> :not([hidden]))) { display: none; }
 .field-error { color: var(--ray-destructive); font-size: var(--ray-font-size-xs); margin: 0; }
-.settings { max-width: 22rem; }
+.settings { max-width: 28rem; }
 
 /* ---- response -------------------------------------------------------------------------- */
 

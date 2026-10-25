@@ -56,7 +56,7 @@ export class KvEditor {
     key.value = row.key;
     const value = el("ray-input", { size: "xs", placeholder: t(this.valueLabel), "aria-label": t(this.valueLabel), spellcheck: "false", autocapitalize: "off" });
     value.value = row.value;
-    const remove = el("ray-icon-button", { size: "sm", variant: "subtle", label: t("kv.remove") }, el("ray-icon", { name: "close" }));
+    const remove = el("ray-icon-button", { size: "xs", variant: "subtle", color: "gray", label: t("kv.remove") }, el("ray-icon", { name: "close" }));
 
     let blank = isBlank;
     const touch = () => {

@@ -11,7 +11,7 @@ export function renderTabs() {
   strip.replaceChildren();
   for (const tab of state.tabs) {
     const selected = tab.id === state.active;
-    const close = el("ray-icon-button", { size: "xs", variant: "subtle", class: "close", label: t("tabs.close") }, el("ray-icon", { name: "close" }));
+    const close = el("ray-icon-button", { size: "1.25rem", variant: "subtle", color: "gray", class: "close", label: t("tabs.close") }, el("ray-icon", { name: "close" }));
     const node = el("div", {
       class: "tab",
       role: "tab",

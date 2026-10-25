@@ -72,7 +72,7 @@ export class AssertionsEditor {
     op.value = row.op;
     const expected = el("ray-input", { size: "xs", spellcheck: "false", autocapitalize: "off" });
     expected.value = row.expected;
-    const remove = el("ray-icon-button", { size: "sm", variant: "subtle", label: t("kv.remove") }, el("ray-icon", { name: "close" }));
+    const remove = el("ray-icon-button", { size: "xs", variant: "subtle", color: "gray", label: t("kv.remove") }, el("ray-icon", { name: "close" }));
 
     // Cells that do not count stay in the grid (visibility) so the columns line up.
     const shape = () => {

@@ -37,7 +37,7 @@ function dedentChanges(text) {
 
 function codeView(text, language) {
   if (language && text.length <= HIGHLIGHT_LIMIT && !dedentChanges(text)) {
-    const code = el("ray-code", { language, "line-numbers": true, "hide-header": true, wrap });
+    const code = el("ray-code", { language, size: "xs", "line-numbers": true, "hide-header": true, wrap });
     code.code = text;
     return code;
   }

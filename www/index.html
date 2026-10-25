@@ -17,7 +17,7 @@
       <ray-group gap="xs" class="project-row">
         <ray-select id="project" size="xs" class="grow" data-i18n-attr="placeholder:project.choose,aria-label:project.label"></ray-select>
         <ray-menu id="project-menu" placement="bottom-end">
-          <ray-icon-button slot="trigger" size="sm" variant="subtle" label="Project actions" data-i18n-attr="label:project.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
+          <ray-icon-button slot="trigger" size="xs" variant="subtle" label="Project actions" data-i18n-attr="label:project.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
           <ray-menu-item value="new"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="project.new"></span></ray-menu-item>
           <ray-menu-item value="edit" data-needs-project><span data-i18n="project.edit"></span></ray-menu-item>
           <ray-menu-divider></ray-menu-divider>
@@ -32,19 +32,19 @@
     <div slot="footer" class="side-foot">
       <ray-button id="new-request" size="xs" variant="light" class="grow"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="request.new"></span></ray-button>
       <ray-tooltip data-i18n-attr="label:folder.new">
-        <ray-icon-button id="new-folder" size="md" variant="default" label="New folder" data-i18n-attr="label:folder.new"><ray-icon name="folder"></ray-icon></ray-icon-button>
+        <ray-icon-button id="new-folder" size="xs" variant="default" label="New folder" data-i18n-attr="label:folder.new"><ray-icon name="folder"></ray-icon></ray-icon-button>
       </ray-tooltip>
     </div>
   </ray-sidebar>
 
   <header slot="header" class="topbar">
-    <ray-icon-button id="toggle-sidebar" variant="subtle" size="sm" label="Toggle sidebar" data-i18n-attr="label:view.toggleSidebar"><ray-icon name="panel-left"></ray-icon></ray-icon-button>
+    <ray-icon-button id="toggle-sidebar" variant="subtle" size="xs" label="Toggle sidebar" data-i18n-attr="label:view.toggleSidebar"><ray-icon name="panel-left"></ray-icon></ray-icon-button>
     <div id="tabs" class="tabstrip" role="tablist" data-i18n-attr="aria-label:tabs.label"></div>
     <ray-group gap="xs" class="top-actions">
       <ray-group gap="0" class="env-picker">
         <ray-select id="environment" size="xs" variant="filled" data-i18n-attr="aria-label:env.label,placeholder:env.label"></ray-select>
         <ray-menu id="env-tools" placement="bottom-end">
-          <ray-icon-button slot="trigger" id="manage-envs" size="sm" variant="subtle" label="Environments and cookies" data-i18n-attr="label:env.tools"><ray-icon name="settings"></ray-icon></ray-icon-button>
+          <ray-icon-button slot="trigger" id="manage-envs" size="xs" variant="subtle" label="Environments and cookies" data-i18n-attr="label:env.tools"><ray-icon name="settings"></ray-icon></ray-icon-button>
           <ray-menu-item value="environments"><span data-i18n="env.manage"></span></ray-menu-item>
           <ray-menu-item value="cookies"><span data-i18n="cookies.manage"></span></ray-menu-item>
         </ray-menu>
@@ -53,7 +53,7 @@
         <option value="en">English</option>
         <option value="es">Español</option>
       </ray-select>
-      <ray-theme-toggle size="sm"></ray-theme-toggle>
+      <ray-theme-toggle size="xs"></ray-theme-toggle>
     </ray-group>
   </header>
 
@@ -73,7 +73,7 @@
         <ray-button id="send" type="submit" size="sm" class="send"><span data-i18n="request.send"></span></ray-button>
         <ray-button id="save" type="button" size="sm" variant="default"><span data-i18n="request.save"></span></ray-button>
         <ray-tooltip data-i18n-attr="label:curl.copy">
-          <ray-icon-button id="copy-curl" size="md" variant="subtle" label="Copy as cURL" data-i18n-attr="label:curl.copy"><ray-icon name="terminal"></ray-icon></ray-icon-button>
+          <ray-icon-button id="copy-curl" size="sm" variant="subtle" label="Copy as cURL" data-i18n-attr="label:curl.copy"><ray-icon name="terminal"></ray-icon></ray-icon-button>
         </ray-tooltip>
       </form>
       <p id="url-preview" class="url-preview" hidden><span class="label" data-i18n="vars.resolvedUrl"></span> <span id="url-resolved" class="mono"></span></p>
@@ -92,17 +92,17 @@
             <ray-tab-panel value="params"><div id="params" class="kv"></div></ray-tab-panel>
             <ray-tab-panel value="headers"><div id="headers" class="kv"></div></ray-tab-panel>
             <ray-tab-panel value="auth"><div id="auth-editor" class="auth-pane"></div></ray-tab-panel>
-            <ray-tab-panel value="body">
+            <ray-tab-panel value="body" class="body-panel">
               <ray-stack gap="sm" class="body-editor">
-                <ray-group gap="sm" justify="space-between">
-                  <ray-segmented-control id="body-type" size="xs"></ray-segmented-control>
-                  <ray-button id="format-body" size="xs" variant="subtle" hidden><span data-i18n="body.format"></span></ray-button>
-                </ray-group>
-                <ray-textarea id="body" class="mono code-area" rows="14" spellcheck="false" autocapitalize="off" data-i18n-attr="aria-label:request.body"></ray-textarea>
+                <ray-segmented-control id="body-type" size="xs" class="body-type"></ray-segmented-control>
+                <ray-textarea id="body" class="mono code-area" rows="6" spellcheck="false" autocapitalize="off" data-i18n-attr="aria-label:request.body"></ray-textarea>
                 <div id="form" class="kv" hidden></div>
                 <div id="parts" class="kv" hidden></div>
                 <p id="body-none" class="ray-muted" data-i18n="body.none" hidden></p>
-                <p id="body-error" class="field-error" role="alert" hidden></p>
+                <div class="body-foot">
+                  <p id="body-error" class="field-error" role="alert" hidden></p>
+                  <ray-button id="format-body" size="xs" variant="default" hidden><span data-i18n="body.format"></span></ray-button>
+                </div>
               </ray-stack>
             </ray-tab-panel>
             <ray-tab-panel value="captures">
@@ -216,7 +216,7 @@
     <ray-group gap="xs" class="env-head">
       <ray-select id="env-edit" size="sm" class="grow" data-i18n-attr="label:env.editing"></ray-select>
       <ray-menu id="env-menu" placement="bottom-end">
-        <ray-icon-button slot="trigger" size="md" variant="default" label="Environment actions" data-i18n-attr="label:env.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
+        <ray-icon-button slot="trigger" size="sm" variant="default" label="Environment actions" data-i18n-attr="label:env.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
         <ray-menu-item value="activate"><span data-i18n="env.activate"></span></ray-menu-item>
         <ray-menu-divider></ray-menu-divider>
         <ray-menu-item value="new"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="env.new"></span></ray-menu-item>
