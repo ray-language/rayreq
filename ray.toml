@@ -12,6 +12,8 @@ embed = ["www"]
 name = "RayReq"
 id = "org.raylang.rayreq"
 copyright = "© 2026 Rayala"
+# ray bundle renders the app icon from this PNG; brand/icon.svg is its source (make icon).
+icon = "brand/icon.png"
 
 [dependencies]
 elements = "^0.8.0"

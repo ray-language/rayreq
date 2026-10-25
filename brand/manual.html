@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual de marca rayreq</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Una hoja de especímenes en una columna: secciones numeradas «NN / TEMA», claro y oscuro. */
+:root {
+  --midnight: #1E2B58; --midnight-dark: #4A63B8; --ink: #12141A; --night: #0F1115; --paper: #FFFFFF; --mist: #EEF0F3; --slate: #5F6672;
+  --bg: #F4F5F7; --surface: #FFFFFF; --panel: #F7F8FA; --fg: #12141A; --muted: #5F6672; --line: #E3E6EB; --accent: #1E2B58;
+  --sans: Geist, ui-sans-serif, system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0B0D11; --surface: #13161C; --panel: #181B22; --fg: #F4F5F7; --muted: #A3A9B4; --line: #252A33; --accent: #8EA2E6; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #0B0D11; --surface: #13161C; --panel: #181B22; --fg: #F4F5F7; --muted: #A3A9B4; --line: #252A33; --accent: #8EA2E6; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 var(--sans); padding-inline: 16px; }
+.wrap { max-width: 60rem; margin: 0 auto; padding-block: 2.5rem 4rem; display: grid; gap: 1.25rem; }
+.masthead { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem 1.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--line); }
+.masthead .meta { margin-left: auto; font: 500 .7rem/1.7 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); text-align: right; }
+.lock { display: flex; align-items: center; gap: .75rem; }
+.wm { font: 500 2.25rem/1 var(--sans); letter-spacing: -0.04em; white-space: nowrap; }
+.tile { display: grid; place-items: center; background: var(--midnight); border-radius: 22.5%; flex: none; }
+.tile svg { width: 66%; height: 66%; }
+.intro p { margin: .5rem 0 0; max-width: 44rem; color: var(--muted); }
+section.sheet { background: var(--surface); border: 1px solid var(--line); border-radius: 1.25rem; padding: 1.5rem; display: grid; gap: 1rem; }
+.eyebrow { margin: 0; font: 500 .7rem var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+h1 { margin: 0; font-size: 2rem; letter-spacing: -0.03em; }
+h2 { margin: .15rem 0 0; font-size: 1.4rem; letter-spacing: -0.02em; text-wrap: balance; }
+h3 { margin: 0; font-size: .95rem; }
+section.sheet > p, .note { margin: 0; max-width: 44rem; color: var(--muted); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; align-items: start; }
+.cols > * { min-width: 0; }
+.panel { border-radius: .875rem; padding: 1.25rem; display: grid; gap: .75rem; }
+.panel.light { background: var(--paper); color: var(--slate); border: 1px solid #E3E6EB; }
+.panel.mist { background: var(--mist); color: var(--slate); }
+.panel.dark { background: var(--night); color: #A3A9B4; }
+.panel.light .wm, .panel.mist .wm { color: var(--ink); }
+.panel.dark .wm { color: #F4F5F7; }
+.label { font: .68rem var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 1.25rem; }
+.stack { display: grid; gap: .35rem; justify-items: center; }
+figure { margin: 0; }
+ul.rules { margin: 0; padding-left: 1.1rem; color: var(--muted); display: grid; gap: .35rem; max-width: 44rem; }
+ul.rules b { color: var(--fg); font-weight: 600; }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: .75rem; }
+.swatch { border: 1px solid var(--line); border-radius: .875rem; overflow: hidden; background: var(--panel); }
+.swatch .chip { height: 4.5rem; display: flex; }
+.swatch .chip span { flex: 1; }
+.swatch .info { padding: .6rem .75rem .7rem; display: grid; gap: .1rem; }
+.swatch .info b { font-size: .9rem; font-weight: 600; }
+.swatch .info code { font: .75rem var(--mono); color: var(--muted); }
+.grid-demo { background-image: linear-gradient(to right, rgb(30 43 88 / .08) 1px, transparent 1px), linear-gradient(to bottom, rgb(30 43 88 / .08) 1px, transparent 1px); background-size: 12.5% 12.5%; border: 1px solid #E3E6EB; border-radius: .75rem; background-color: #fff; }
+.clear { position: relative; display: inline-flex; padding: 1.25rem; border: 1px dashed #9AA3B5; border-radius: .5rem; }
+.clear::after { content: "x"; position: absolute; top: .1rem; left: .4rem; font: .65rem var(--mono); color: #6B7385; }
+.type { display: grid; gap: .25rem; }
+.type .big { font: 500 3rem/1.05 var(--sans); letter-spacing: -0.04em; }
+.type .mono { font: 400 1.05rem var(--mono); }
+.dont { display: grid; gap: .5rem; }
+.dont .box { aspect-ratio: 4 / 3; display: grid; place-items: center; border-radius: .75rem; background: var(--mist); position: relative; overflow: hidden; }
+.dont .box::after { content: ""; position: absolute; inset: auto -10% 50% -10%; height: 2px; background: #C0392B; transform: rotate(-24deg); opacity: .8; }
+.dont p { margin: 0; font-size: .85rem; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { text-align: left; padding: .55rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 .68rem var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+td code { font: .8rem var(--mono); }
+.scroll { overflow-x: auto; }
+footer { color: var(--muted); font-size: .8rem; text-align: center; padding-top: 1rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="masthead">
+  <div class="lock">
+    <span class="tile" style="width: 3.25rem; height: 3.25rem"><svg viewBox="0 0 64 64" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg></span>
+    <div>
+      <p class="eyebrow">Manual de marca</p>
+      <h1>rayreq</h1>
+    </div>
+  </div>
+  <div class="meta">Versión 1.0<br>Octubre 2026</div>
+</header>
+
+<div class="intro">
+  <p>rayreq es un cliente REST de escritorio hecho con raylang y ray-elements. Este manual fija cómo se dibuja, se colorea y se escribe la marca, para que el icono, la app y la documentación se vean como una sola cosa. Los archivos citados están junto a este documento, en <code>brand/</code>.</p>
+</div>
+
+<section class="sheet" id="esencia">
+  <p class="eyebrow">01 / Esencia</p>
+  <h2>Una «r» que envía</h2>
+  <p>El símbolo es una «r» minúscula cuyo hombro se convierte en una flecha hacia la derecha: el nombre y la acción principal de la app (enviar una petición) en un solo trazo. Es geométrico, de línea redondeada y de un solo color, como los iconos de la interfaz.</p>
+  <ul class="rules">
+    <li><b>Preciso:</b> trazos de grosor constante, ángulos limpios, nada decorativo.</li>
+    <li><b>Sobrio:</b> un azul medianoche profundo y neutros; el color vivo queda para la interfaz.</li>
+    <li><b>Técnico, no frío:</b> terminaciones redondas y minúsculas, sin mayúsculas gritonas.</li>
+  </ul>
+</section>
+
+<section class="sheet" id="simbolo">
+  <p class="eyebrow">02 / Símbolo</p>
+  <h2>Construcción</h2>
+  <p>Se dibuja en una cuadrícula de 64 × 64 con un trazo de 5,5 unidades, extremos y uniones redondeados. El asta va de y = 50 a y = 23; el hombro nace en y = 33 y termina en la punta (46, 23), con brazos de 6 unidades a 45°. No se redibuja: se usa siempre desde los archivos.</p>
+  <div class="cols">
+    <figure class="grid-demo" style="aspect-ratio: 1; display: grid; place-items: center">
+      <svg viewBox="0 0 64 64" width="70%" height="70%" fill="none" stroke="#1E2B58" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Símbolo de rayreq sobre su cuadrícula"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/><g stroke="#4A63B8" stroke-width=".35" stroke-dasharray="1 1"><path d="M8 23H56M8 33H56M8 50H56M20 8V56M46 8V56"/></g></svg>
+    </figure>
+    <div class="panel mist">
+      <span class="label">Medidas en la cuadrícula de 64</span>
+      <table>
+        <tr><th>Elemento</th><th>Valor</th></tr>
+        <tr><td>Trazo</td><td><code>5,5</code> (6–8 en tamaños pequeños)</td></tr>
+        <tr><td>Asta</td><td><code>x 20 · y 23 → 50</code></td></tr>
+        <tr><td>Hombro</td><td><code>C20 27 25 23 32 23 H46</code></td></tr>
+        <tr><td>Punta</td><td><code>(40,17) (46,23) (40,29)</code></td></tr>
+        <tr><td>Extremos</td><td>redondos</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="sheet" id="logotipo">
+  <p class="eyebrow">03 / Logotipo</p>
+  <h2>Símbolo y nombre</h2>
+  <p>El logotipo combina el símbolo y el nombre en minúsculas, escrito en Geist Medium con un interletrado de −0,04 em. El símbolo mide 1,45 veces el tamaño de letra del nombre (52 px para 36 px) y lo separa un tercio de ese tamaño. El nombre siempre se escribe <b>rayreq</b>, en minúsculas y en una palabra; en la barra de título del sistema, donde manda el estilo de macOS, aparece como RayReq.</p>
+  <div class="cols">
+    <div class="panel light">
+      <span class="label">Sobre claro</span>
+      <div class="lock"><svg viewBox="0 0 64 64" width="52" height="52" fill="none" stroke="#1E2B58" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg><span class="wm">rayreq</span></div>
+    </div>
+    <div class="panel dark">
+      <span class="label">Sobre oscuro</span>
+      <div class="lock"><svg viewBox="0 0 64 64" width="52" height="52" fill="none" stroke="#F4F5F7" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg><span class="wm">rayreq</span></div>
+    </div>
+    <div class="panel mist">
+      <span class="label">Con mosaico</span>
+      <div class="lock"><span class="tile" style="width: 52px; height: 52px"><svg viewBox="0 0 64 64" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg></span><span class="wm">rayreq</span></div>
+    </div>
+  </div>
+  <div class="cols">
+    <div class="panel mist">
+      <h3>Área de protección</h3>
+      <p class="note">Alrededor del logotipo queda libre, como mínimo, la altura <b>x</b> de la punta de flecha (un tercio del símbolo). Ningún texto, borde o imagen entra en ese margen.</p>
+      <div><span class="clear"><span class="lock"><svg viewBox="0 0 64 64" width="40" height="40" fill="none" stroke="#1E2B58" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg><span class="wm" style="font-size: 1.75rem; color: #12141A">rayreq</span></span></span></div>
+    </div>
+    <div class="panel mist">
+      <h3>Tamaños mínimos</h3>
+      <table>
+        <tr><th>Pieza</th><th>Pantalla</th><th>Impreso</th></tr>
+        <tr><td>Logotipo</td><td>96 px de ancho</td><td>25 mm</td></tr>
+        <tr><td>Símbolo solo</td><td>16 px</td><td>5 mm</td></tr>
+        <tr><td>Icono de app</td><td>16 px</td><td>—</td></tr>
+      </table>
+      <p class="note">Por debajo de 24 px, el trazo sube a 7–8 unidades para que no se pierda.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sheet" id="icono">
+  <p class="eyebrow">04 / Icono de app</p>
+  <h2>El mosaico medianoche</h2>
+  <p>El icono es el símbolo en blanco sobre un mosaico medianoche con un degradado vertical muy leve (<code>#25356B</code> → <code>#1A2550</code>), un filo blanco al 8 % y una sombra suave. Sigue la rejilla de Apple para macOS: lienzo de 1024 px, mosaico de 824 px a 100 px del borde y radio de 185 px; el símbolo ocupa dos tercios del mosaico.</p>
+  <div class="panel mist">
+    <div class="row">
+      <figure class="stack"><img src="icon.svg" width="160" height="160" alt="Icono de rayreq"><span class="label">1024 · fuente</span></figure>
+      <figure class="stack"><span class="tile" style="width: 64px; height: 64px; border-radius: 14px"><svg viewBox="0 0 64 64" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg></span><span class="label">64</span></figure>
+      <figure class="stack"><span class="tile" style="width: 32px; height: 32px; border-radius: 7px"><svg viewBox="0 0 64 64" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg></span><span class="label">32</span></figure>
+      <figure class="stack"><span class="tile" style="width: 16px; height: 16px; border-radius: 4px"><svg viewBox="0 0 64 64" fill="none" stroke="#fff" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg></span><span class="label">16</span></figure>
+    </div>
+  </div>
+  <p class="note">El PNG que empaqueta <code>ray bundle</code> (<code>brand/icon.png</code>, declarado en <code>[app] icon</code> de <code>ray.toml</code>) se genera desde <code>brand/icon.svg</code> con <code>make icon</code>. Nunca se edita el PNG a mano.</p>
+</section>
+
+<section class="sheet" id="color">
+  <p class="eyebrow">05 / Color</p>
+  <h2>Medianoche y neutros</h2>
+  <p>Medianoche es el color de la marca y el acento por defecto de la app. En el tema oscuro, donde el azul profundo desaparecería sobre el fondo, se usa su compañero claro. El resto son neutros fríos: la marca no usa más colores.</p>
+  <div class="swatches">
+    <div class="swatch"><div class="chip"><span style="background: #1E2B58"></span></div><div class="info"><b>Medianoche</b><code>#1E2B58 · marca</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #4A63B8"></span></div><div class="info"><b>Medianoche claro</b><code>#4A63B8 · tema oscuro</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #12141A"></span></div><div class="info"><b>Tinta</b><code>#12141A · texto</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #0F1115"></span></div><div class="info"><b>Noche</b><code>#0F1115 · fondo oscuro</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #5F6672"></span></div><div class="info"><b>Pizarra</b><code>#5F6672 · texto secundario</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #EEF0F3"></span></div><div class="info"><b>Niebla</b><code>#EEF0F3 · superficies</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #FFFFFF; box-shadow: inset 0 0 0 1px #E3E6EB"></span></div><div class="info"><b>Papel</b><code>#FFFFFF · fondo claro</code></div></div>
+  </div>
+  <h3>Tonos de acento de la app</h3>
+  <p class="note">La app deja elegir el color primario de la interfaz entre siete tonos (menú del punto de color, en la barra superior). Son una capa de personalización: el logotipo y el icono siguen siempre en medianoche. Cada muestra enseña el tono del tema claro y, a su derecha, el del oscuro.</p>
+  <div class="swatches">
+    <div class="swatch"><div class="chip"><span style="background: #1E2B58"></span><span style="background: #4A63B8"></span></div><div class="info"><b>Medianoche</b><code>#1E2B58 / #4A63B8</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #3B5BFD"></span></div><div class="info"><b>Cobalto</b><code>#3B5BFD</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #4338CA"></span></div><div class="info"><b>Índigo</b><code>#4338CA</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #0B6E99"></span></div><div class="info"><b>Océano</b><code>#0B6E99</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #0F6B5C"></span></div><div class="info"><b>Pino</b><code>#0F6B5C</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #6D4AFF"></span></div><div class="info"><b>Violeta</b><code>#6D4AFF</code></div></div>
+    <div class="swatch"><div class="chip"><span style="background: #1C1F26"></span><span style="background: #E4E6EB"></span></div><div class="info"><b>Grafito</b><code>#1C1F26 / #E4E6EB</code></div></div>
+  </div>
+  <p class="note">No hay tonos rojos ni naranjas: en la app esos colores significan error, aviso o un método destructivo (DELETE), y un botón «Enviar» rojo parecería peligroso.</p>
+</section>
+
+<section class="sheet" id="tipografia">
+  <p class="eyebrow">06 / Tipografía</p>
+  <h2>Geist y Geist Mono</h2>
+  <p>Geist (de Vercel, licencia OFL) da voz a la marca: el nombre en Medium, los titulares en Semibold y el texto en Regular. Geist Mono es para código, URLs y valores. Dentro de la app manda la tipografía del sistema que usa ray-elements; Geist es para el logotipo, la documentación y el material de la marca.</p>
+  <div class="cols">
+    <div class="panel mist type">
+      <span class="label">Geist Medium · −0,04 em</span>
+      <span class="big" style="color: #12141A">rayreq</span>
+      <span style="color: #12141A">Peticiones, entornos y respuestas en un solo lugar.</span>
+    </div>
+    <div class="panel mist type">
+      <span class="label">Geist Mono · 400</span>
+      <span class="mono" style="color: #12141A">GET {{baseUrl}}/users?page=1</span>
+      <span class="mono" style="color: #5F6672">200 OK · 42 ms · 1,2 kB</span>
+    </div>
+  </div>
+</section>
+
+<section class="sheet" id="usos">
+  <p class="eyebrow">07 / Usos incorrectos</p>
+  <h2>Lo que no se hace</h2>
+  <div class="cols" style="grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr))">
+    <div class="dont"><div class="box"><svg viewBox="0 0 64 64" width="72" height="72" fill="none" stroke="#1E2B58" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(-30deg)" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg></div><p>No girar ni reflejar el símbolo: la flecha siempre apunta hacia delante.</p></div>
+    <div class="dont"><div class="box"><svg viewBox="0 0 64 64" width="72" height="72" fill="none" stroke="#1E2B58" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg></div><p>No cambiar el grosor del trazo ni sus extremos redondos.</p></div>
+    <div class="dont"><div class="box"><svg viewBox="0 0 64 64" width="72" height="72" fill="none" stroke="#E0482F" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 50V23"/><path d="M20 33C20 27 25 23 32 23H46"/><path d="M40 17L46 23L40 29"/></svg></div><p>No colorear la marca fuera de la paleta (rojos y naranjas, menos aún).</p></div>
+    <div class="dont"><div class="box"><span class="wm" style="font-size: 1.75rem; font-family: Georgia, serif; letter-spacing: 0; color: #12141A">RayReq</span></div><p>No escribir el nombre con otra tipografía ni en mayúsculas.</p></div>
+  </div>
+</section>
+
+<section class="sheet" id="archivos">
+  <p class="eyebrow">08 / Archivos</p>
+  <h2>Qué usar y dónde</h2>
+  <div class="scroll">
+    <table>
+      <tr><th>Archivo</th><th>Uso</th></tr>
+      <tr><td><code>brand/icon.svg</code></td><td>Fuente del icono de la app (rejilla de macOS, 1024 px).</td></tr>
+      <tr><td><code>brand/icon.png</code></td><td>Icono que empaqueta <code>ray bundle</code>; se genera con <code>make icon</code>.</td></tr>
+      <tr><td><code>brand/mark.svg</code></td><td>Símbolo en medianoche, para fondos claros.</td></tr>
+      <tr><td><code>brand/mark-dark.svg</code></td><td>Símbolo claro, para fondos oscuros.</td></tr>
+      <tr><td><code>brand/favicon.svg</code></td><td>Mosaico pequeño: favicons, documentación, avatares.</td></tr>
+      <tr><td><code>brand/manual.html</code></td><td>Este manual.</td></tr>
+    </table>
+  </div>
+</section>
+
+<footer>rayreq · Manual de marca 1.0 · © 2026 Rayala</footer>
+</div>
+</body>
+</html>

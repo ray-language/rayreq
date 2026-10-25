@@ -1,7 +1,7 @@
 # RayReq — common tasks. `make` (or `make help`) lists them.
 
 .DEFAULT_GOAL := help
-.PHONY: help run dev test test-native check check-markup fmt build bundle-macos
+.PHONY: help run dev test test-native check check-markup fmt build bundle-macos icon
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-14s %s\n", $$1, $$2}'
@@ -32,3 +32,6 @@ build: ## Native binary, refusing anything outside the native subset
 
 bundle-macos: ## RayReq.app
 	ray bundle
+
+icon: ## Render brand/icon.png (the bundle icon) from brand/icon.svg (needs rsvg-convert)
+	rsvg-convert -w 1024 -h 1024 brand/icon.svg -o brand/icon.png
