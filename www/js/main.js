@@ -253,6 +253,15 @@ async function boot() {
   }
 
   $("language").addEventListener("change", (e) => A.guard(() => changeLanguage(e.target.value)));
+  // Escape stops the active request's send, unless something else took it first: a menu or a
+  // list (they consume it from the document, before the window hears it) or an open dialog.
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    const tab = activeTab();
+    if (!tab || !tab.run || document.querySelector("ray-dialog[open]") || $("palette").open) return;
+    e.preventDefault();
+    A.guard(() => A.cancel(tab));
+  });
   $("toggle-sidebar").addEventListener("click", toggleSidebar);
   restoreSidebar();
 

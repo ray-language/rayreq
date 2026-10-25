@@ -11,6 +11,7 @@ import { activeTab, emit, on, state } from "./state.js";
 import { $, debounce, paramsFromUrl, parseJsonTemplate, reindentJson, urlFromParams } from "./util.js";
 import { refreshVariables, refreshVariablesSoon, renderVariables } from "./variables.js";
 import { refreshFields, varField } from "./varfield.js";
+import { headerValues } from "./complete.js";
 
 /// What the active request's `{{variables}}` resolve to, as the program last said.
 const scope = () => activeTab()?.vars || null;
@@ -160,6 +161,8 @@ export function initEditor() {
   headers = new KvEditor($("headers"), {
     keyLabel: "kv.header",
     variables: scope,
+    // Content-Type and Accept take media types: suggest them (any text still goes).
+    valueCompletions: (row) => headerValues(row.key),
     onChange: (rows) => {
       const d = draft();
       if (!d || loading) return;

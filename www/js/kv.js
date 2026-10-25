@@ -8,17 +8,20 @@ import { el } from "./util.js";
 import { t } from "./i18n.js";
 import { varField } from "./varfield.js";
 import "./mode-input.js";
+import { CONTENT_TYPES, completeField } from "./complete.js";
 
 export class KvEditor {
   /// keyLabel / valueLabel: the i18n keys of the two columns ("kv.key", "kv.header", "kv.field",
   /// "kv.variable"; "kv.value", "kv.path"). `variables`, when given, is the scope whose
-  /// `{{variables}}` the keys and values show (varfield.js).
-  constructor(container, { keyLabel = "kv.key", valueLabel = "kv.value", onChange = () => {}, variables = null } = {}) {
+  /// `{{variables}}` the keys and values show (varfield.js). `valueCompletions(row)`, when
+  /// given, is what to suggest for a row's value (complete.js; null for nothing).
+  constructor(container, { keyLabel = "kv.key", valueLabel = "kv.value", onChange = () => {}, variables = null, valueCompletions = null } = {}) {
     this.container = container;
     this.keyLabel = keyLabel;
     this.valueLabel = valueLabel;
     this.onChange = onChange;
     this.variables = variables;
+    this.valueCompletions = valueCompletions;
     this.rows = [];
     this.render();
   }
@@ -104,6 +107,7 @@ export class KvEditor {
     }
     line.append(key, value, box, remove);
     if (this.variables) for (const input of [key, value]) varField(input, this.variables);
+    if (this.valueCompletions) completeField(value, () => this.valueCompletions(row));
     return line;
   }
 }
@@ -150,6 +154,7 @@ export class PartsEditor extends KvEditor {
     const ctype = el("ray-input", { size: "xs", placeholder: t("parts.type"), "aria-label": t("parts.type"), spellcheck: "false", autocapitalize: "off" });
     ctype.value = row.content_type;
     if (this.variables) varField(ctype, this.variables);
+    completeField(ctype, () => ({ items: CONTENT_TYPES }));
     // A path's end (the file's name) is what tells it apart: shown when the field is not being
     // edited, the whole path on hover.
     const toEnd = () => {

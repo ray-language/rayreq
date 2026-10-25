@@ -196,7 +196,10 @@ function accept(index) {
   // Through the editing commands, so it can be undone and the field hears an ordinary input.
   inserting = true;
   try {
-    if (!document.execCommand("insertText", false, `${v.key}}}`)) {
+    // execCommand edits the focused element: without the focus (a window in the background)
+    // it may report success and do nothing, so the value is set directly then.
+    const focused = c.getRootNode().activeElement === c;
+    if (!focused || !document.execCommand("insertText", false, `${v.key}}}`)) {
       const text = c.value;
       c.value = text.slice(0, at.start) + `${v.key}}}` + text.slice(at.closed ? at.end + 2 : at.end);
       c.setSelectionRange(at.start + v.key.length + 2, at.start + v.key.length + 2);

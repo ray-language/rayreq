@@ -5,6 +5,7 @@
 import { el } from "./util.js";
 import { t } from "./i18n.js";
 import { varField } from "./varfield.js";
+import { completeField, headerValues } from "./complete.js";
 
 const SOURCES = ["status", "header", "json", "body", "time", "size"];
 const OPS = ["eq", "ne", "lt", "le", "gt", "ge", "contains", "not_contains", "matches", "exists", "not_exists", "type"];
@@ -76,6 +77,8 @@ export class AssertionsEditor {
     const expected = el("ray-input", { size: "xs", spellcheck: "false", autocapitalize: "off" });
     expected.value = row.expected;
     if (this.variables) for (const input of [path, expected]) varField(input, this.variables);
+    // A check on the Content-Type header suggests media types for its expected value.
+    completeField(expected, () => (row.source === "header" ? headerValues(row.path) : null));
     const remove = el("ray-icon-button", { size: "xs", variant: "subtle", color: "gray", label: t("kv.remove") }, el("ray-icon", { name: "close" }));
 
     // Cells that do not count stay in the grid (visibility) so the columns line up.

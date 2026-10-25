@@ -355,3 +355,5 @@ table.runner-table td:last-child { font-family: inherit; word-break: normal; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: end;
 }
 .var-option .var-source { grid-area: source; color: var(--ray-muted-foreground); }
+/* A completion's hint is a word about the value ("JSON"), not a value. */
+#complete-list .var-value { font-family: inherit; }

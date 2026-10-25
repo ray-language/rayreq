@@ -87,6 +87,43 @@ export async function run(port, sampleFile) {
     expect(tab.draft.headers.length === 1 && tab.draft.headers[0].key === "X-Check", "header row");
     expect($("headers").querySelectorAll(".kv-row").length === 2, "a new blank row after typing");
 
+    // Content-Type and Accept suggest media types; any other text still goes.
+    {
+      const field = (row, i) => $("headers").querySelectorAll(".kv-row")[row].querySelectorAll("ray-input")[i];
+      const typeInField = (host, text) => {
+        const c = host.control;
+        c.focus();
+        c.value = text;
+        c.setSelectionRange(text.length, text.length);
+        c.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      };
+      const press = (host, k) => host.control.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, composed: true, cancelable: true }));
+      const shown = () => {
+        const box = document.getElementById("complete-list");
+        return box && box.matches(":popover-open") ? [...box.querySelectorAll(".var-name")].map((x) => x.textContent) : [];
+      };
+      type(field(1, 0), "Content-Type");
+      await tick();
+      typeInField(field(1, 1), "json");
+      expect(shown()[0] === "application/json" && shown().includes("application/problem+json"), `json suggests: ${shown()}`);
+      press(field(1, 1), "Enter");
+      expect(field(1, 1).value === "application/json" && tab.draft.headers[1].value === "application/json" && !shown().length,
+        `taken: ${field(1, 1).value}`);
+      typeInField(field(1, 1), "application/vnd.custom");
+      press(field(1, 1), "Escape");
+      expect(!shown().length && tab.draft.headers[1].value === "application/vnd.custom", "free text stays");
+      type(field(1, 0), "Accept");
+      typeInField(field(1, 1), "application/json, te");
+      expect(shown()[0] === "text/plain", `accept piece suggests: ${shown()}`);
+      press(field(1, 1), "Enter");
+      expect(field(1, 1).value === "application/json, text/plain", `accept list: ${field(1, 1).value}`);
+      typeInField(field(0, 1), "ye");
+      expect(!shown().length, "an X-Check value has nothing to suggest");
+      type(field(0, 1), "yes");
+      $("headers").querySelectorAll(".kv-row")[1].querySelector("ray-icon-button").click();
+      expect(tab.draft.headers.length === 1, "the extra header removed");
+    }
+
     // POST with a JSON body.
     type($("method"), "POST", "change");
     type($("body-type"), "json", "change");
@@ -137,6 +174,12 @@ export async function run(port, sampleFile) {
     await A.cancel(tab);
     await pending;
     expect(tab.response.cancelled && Date.now() - t0 < 1000, "cancel answers at once");
+    // Escape stops a send too (when nothing else is open to take it).
+    const pendingEsc = A.send(tab);
+    await until(() => tab.run, "the second send started");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+    await pendingEsc;
+    expect(tab.response.cancelled && !tab.run, "Escape cancelled the send");
 
     // An unreachable server is a failure with its reason, not a crash.
     type($("url"), "http://127.0.0.1:1/");
@@ -639,6 +682,19 @@ export async function run(port, sampleFile) {
     $("req-tabs").value = "body";
     await tick();
     fits($("parts"), "multipart parts");
+    // A part's content type suggests media types too.
+    {
+      const ctypeField = fileRow.querySelectorAll("ray-input")[1];
+      const c = ctypeField.control;
+      c.value = "pn";
+      c.setSelectionRange(2, 2);
+      c.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      const box = document.getElementById("complete-list");
+      const offered = [...box.querySelectorAll(".var-name")].map((x) => x.textContent);
+      expect(box.matches(":popover-open") && offered.includes("image/png"), `part content types: ${offered}`);
+      c.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true, cancelable: true }));
+      type(ctypeField, "");
+    }
     // A file part shows the end of its path (the file's name) once it is not being edited.
     const pathField = fileRow.querySelector("rr-mode-input");
     pathField.value = `/a/very/long/folder/that/goes/on/and/on/and/on/before/the/name/${"x".repeat(40)}/sample.txt`;
