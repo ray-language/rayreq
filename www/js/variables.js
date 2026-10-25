@@ -12,6 +12,7 @@ import { AuthEditor } from "./auth.js";
 import { KvEditor } from "./kv.js";
 import { activeTab, emit, folderOf, on, state } from "./state.js";
 import { $, debounce, el } from "./util.js";
+import { sourceText } from "./varfield.js";
 
 // ---- the request's resolved variables -------------------------------------------------------
 
@@ -33,10 +34,6 @@ export async function refreshVariables() {
 }
 
 export const refreshVariablesSoon = debounce(refreshVariables, 250);
-
-function sourceText(v, envName) {
-  return t(`vars.kind.${v.kind}`, { name: v.source, env: envName });
-}
 
 function usedNames(d) {
   const text = [d.url, ...d.headers.flatMap((h) => [h.key, h.value]), d.body, ...d.form.flatMap((f) => [f.key, f.value])].join("\n");

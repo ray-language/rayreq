@@ -12,6 +12,7 @@ import { call } from "./api.js";
 import { formatTime, t } from "./i18n.js";
 import { nextRun } from "./state.js";
 import { debounce, el } from "./util.js";
+import { varField } from "./varfield.js";
 
 export function blankAuth(kind = "inherit") {
   return {
@@ -26,10 +27,12 @@ export const AUTH_NAMES = { basic: "Basic", bearer: "Bearer", apikey: "API key",
 export class AuthEditor {
   /// forFolder: "inherit" then means the parent folder's, not the request's folder.
   /// oauthContext(): what the program needs to find the token ({request} or {project_id,
-  /// folder_id, auth}); null when there is none (nothing saved yet).
-  constructor(container, { forFolder = false, onChange = () => {}, oauthContext = () => null } = {}) {
+  /// folder_id, auth}); null when there is none (nothing saved yet). variables: the scope whose
+  /// `{{variables}}` the fields show (varfield.js); secrets are masked, so they do not.
+  constructor(container, { forFolder = false, onChange = () => {}, oauthContext = () => null, variables = null } = {}) {
     this.container = container;
     this.forFolder = forFolder;
+    this.variables = variables;
     this.onChange = onChange;
     this.oauthContext = oauthContext;
     this.auth = blankAuth();
@@ -52,6 +55,7 @@ export class AuthEditor {
       if (e.key === "Enter") e.preventDefault();
     });
     this.inputs.push({ field, x });
+    if (this.variables && !secret) varField(x, this.variables);
     return x;
   }
 

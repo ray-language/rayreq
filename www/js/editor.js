@@ -10,6 +10,10 @@ import { KvEditor, PartsEditor } from "./kv.js";
 import { activeTab, emit, on, state } from "./state.js";
 import { $, debounce, paramsFromUrl, reindentJson, urlFromParams } from "./util.js";
 import { refreshVariables, refreshVariablesSoon, renderVariables } from "./variables.js";
+import { refreshFields, varField } from "./varfield.js";
+
+/// What the active request's `{{variables}}` resolve to, as the program last said.
+const scope = () => activeTab()?.vars || null;
 
 let params, headers, form, parts, captures, checks, authEditor;
 let loading = false; // set while the fields are filled from a draft: no echo back
@@ -143,6 +147,7 @@ export function renderSendButton() {
 export function initEditor() {
   params = new KvEditor($("params"), {
     keyLabel: "kv.key",
+    variables: scope,
     onChange: (rows) => {
       const d = draft();
       if (!d || loading) return;
@@ -154,6 +159,7 @@ export function initEditor() {
   });
   headers = new KvEditor($("headers"), {
     keyLabel: "kv.header",
+    variables: scope,
     onChange: (rows) => {
       const d = draft();
       if (!d || loading) return;
@@ -163,6 +169,7 @@ export function initEditor() {
   });
   form = new KvEditor($("form"), {
     keyLabel: "kv.field",
+    variables: scope,
     onChange: (rows) => {
       const d = draft();
       if (!d || loading) return;
@@ -174,6 +181,7 @@ export function initEditor() {
   authEditor = new AuthEditor($("auth-editor"), {
     // The token is found through the request (its own auth, or the folder's it inherits).
     oauthContext: () => (draft() ? { request: draft() } : null),
+    variables: scope,
     onChange: (a) => {
       const d = draft();
       if (!d || loading) return;
@@ -183,6 +191,7 @@ export function initEditor() {
   });
 
   parts = new PartsEditor($("parts"), {
+    variables: scope,
     onChange: (rows) => {
       const d = draft();
       if (!d || loading) return;
@@ -203,6 +212,7 @@ export function initEditor() {
   });
 
   checks = new AssertionsEditor($("assertions"), {
+    variables: scope,
     onChange: (rows) => {
       const d = draft();
       if (!d || loading) return;
@@ -322,6 +332,9 @@ export function initEditor() {
   });
   on("focus-url", () => requestAnimationFrame(() => $("url").focus()));
   on("resolved", renderAuthInfo);
+  varField($("url"), scope);
+  varField($("body"), scope);
+  on("resolved", refreshFields);
   on("reload-editor", () => loadEditor());
   on("language", () => {
     authEditor.relabel();

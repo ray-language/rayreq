@@ -4,6 +4,7 @@
 
 import { el } from "./util.js";
 import { t } from "./i18n.js";
+import { varField } from "./varfield.js";
 
 const SOURCES = ["status", "header", "json", "body", "time", "size"];
 const OPS = ["eq", "ne", "lt", "le", "gt", "ge", "contains", "not_contains", "matches", "exists", "not_exists", "type"];
@@ -26,9 +27,11 @@ export function cleanAssertions(rows) {
 /// A table like KvEditor's: one row per assertion and a blank one at the end; changing anything
 /// in the blank row makes it a real one. Typing never re-renders (the focus stays put).
 export class AssertionsEditor {
-  constructor(container, { onChange = () => {} } = {}) {
+  /// `variables`: the scope whose `{{variables}}` the path and expected value show (varfield.js).
+  constructor(container, { onChange = () => {}, variables = null } = {}) {
     this.container = container;
     this.onChange = onChange;
+    this.variables = variables;
     this.rows = [];
     this.render();
   }
@@ -72,6 +75,7 @@ export class AssertionsEditor {
     op.value = row.op;
     const expected = el("ray-input", { size: "xs", spellcheck: "false", autocapitalize: "off" });
     expected.value = row.expected;
+    if (this.variables) for (const input of [path, expected]) varField(input, this.variables);
     const remove = el("ray-icon-button", { size: "xs", variant: "subtle", color: "gray", label: t("kv.remove") }, el("ray-icon", { name: "close" }));
 
     // Cells that do not count stay in the grid (visibility) so the columns line up.

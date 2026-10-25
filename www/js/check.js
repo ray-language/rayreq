@@ -42,6 +42,9 @@ function inView(tabs, what) {
   expect(r.left >= list.left - 1 && r.right <= list.right + 1, `${what}: the selected tab is scrolled out of view`);
 }
 
+/// Two animation frames: what a field paints after a value set from code is on screen.
+const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
 async function until(cond, what, ms = 8000) {
   const end = Date.now() + ms;
   while (!cond()) {
@@ -202,6 +205,52 @@ export async function run(port, sampleFile) {
     expect(tab.vars.url === `${base}/echo?x=folder&y={{nope}}`, `resolved URL: ${tab.vars.url}`);
     expect($("url-resolved").textContent === tab.vars.url && !$("url-preview").hidden, "the resolved URL is shown");
     expect(!$("count-missing").hidden, "the missing badge");
+
+    // Each {{name}} in a field is tinted by whether it resolves, over the same pixels as its text.
+    await frames();
+    const urlBox = $("url");
+    const mirror = urlBox.shadowRoot.querySelector(".vars-mirror");
+    const marks = [...mirror.querySelectorAll("mark")].map((m) => `${m.dataset.name}${m.hasAttribute("data-missing") ? "?" : ""}`);
+    expect(marks.join() === "base,x,nope?", `URL marks: ${marks}`);
+    expect(mirror.textContent === urlBox.control.value, `mirror text: ${mirror.textContent}`);
+    const urlFont = getComputedStyle(urlBox.control);
+    const pen = document.createElement("canvas").getContext("2d");
+    pen.font = `${urlFont.fontWeight} ${urlFont.fontSize} ${urlFont.fontFamily}`;
+    const span = document.createRange();
+    span.selectNodeContents(mirror.firstChild);
+    const drawn = span.getBoundingClientRect().width;
+    expect(Math.abs(drawn - pen.measureText(urlBox.control.value).width) < 2, `mirror text width ${drawn} vs ${pen.measureText(urlBox.control.value).width}`);
+    expect(Math.abs(mirror.getBoundingClientRect().left - urlBox.control.getBoundingClientRect().left) < 1, "the mirror sits on the control");
+
+    // Typing {{ suggests the variables that reach the request; Enter completes the name, and
+    // neither Enter nor Escape reaches the field (no send, no dialog closed).
+    const keep = urlBox.value;
+    const typed = (text) => {
+      const c = urlBox.control;
+      c.focus();
+      c.value = text;
+      c.setSelectionRange(text.length, text.length);
+      c.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    };
+    const key = (k) => urlBox.control.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, composed: true, cancelable: true }));
+    typed(`${keep}&z={{`);
+    const list = $("var-suggest");
+    const offered = () => [...list.querySelectorAll(".var-name")].map((n) => n.textContent);
+    expect(list && list.matches(":popover-open"), "the suggestions open after {{");
+    expect(offered().join() === "base,x", `suggested: ${offered()}`);
+    typed(`${keep}&z={{b`);
+    expect(offered().join() === "base", `filtered: ${offered()}`);
+    typed(`${keep}&z={{`);
+    key("ArrowDown");
+    key("Enter");
+    expect(!list.matches(":popover-open"), "Enter closes the suggestions");
+    expect(urlBox.value === `${keep}&z={{x}}` && tab.draft.url === urlBox.value, `completed: ${urlBox.value} / ${tab.draft.url}`);
+    expect(!tab.run, "Enter in the suggestions does not send");
+    typed(`${keep}&z={{`);
+    key("Escape");
+    expect(!list.matches(":popover-open") && urlBox.value === `${keep}&z={{`, "Escape closes them and leaves the text");
+    type(urlBox, keep);
+    await V.refreshVariables();
 
     await A.send(tab);
     r = tab.response;

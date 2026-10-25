@@ -5,15 +5,18 @@
 import { getHost, hostCan } from "@raylang/elements";
 import { el } from "./util.js";
 import { t } from "./i18n.js";
+import { varField } from "./varfield.js";
 
 export class KvEditor {
   /// keyLabel / valueLabel: the i18n keys of the two columns ("kv.key", "kv.header", "kv.field",
-  /// "kv.variable"; "kv.value", "kv.path").
-  constructor(container, { keyLabel = "kv.key", valueLabel = "kv.value", onChange = () => {} } = {}) {
+  /// "kv.variable"; "kv.value", "kv.path"). `variables`, when given, is the scope whose
+  /// `{{variables}}` the keys and values show (varfield.js).
+  constructor(container, { keyLabel = "kv.key", valueLabel = "kv.value", onChange = () => {}, variables = null } = {}) {
     this.container = container;
     this.keyLabel = keyLabel;
     this.valueLabel = valueLabel;
     this.onChange = onChange;
+    this.variables = variables;
     this.rows = [];
     this.render();
   }
@@ -93,6 +96,7 @@ export class KvEditor {
       box.style.visibility = "hidden";
     }
     line.append(box, key, value, remove);
+    if (this.variables) for (const input of [key, value]) varField(input, this.variables);
     return line;
   }
 }
@@ -128,6 +132,7 @@ export class PartsEditor extends KvEditor {
     const pick = el("ray-icon-button", { size: "sm", variant: "subtle", label: t("parts.choose") }, el("ray-icon", { name: "folder" }));
     const ctype = el("ray-input", { size: "xs", placeholder: t("parts.type"), "aria-label": t("parts.type"), spellcheck: "false", autocapitalize: "off" });
     ctype.value = row.content_type;
+    if (this.variables) varField(ctype, this.variables);
     const showKind = () => {
       value.placeholder = t(row.file ? "parts.path" : "kv.value");
       value.setAttribute("aria-label", value.placeholder);

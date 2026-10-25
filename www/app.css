@@ -265,3 +265,47 @@ table.runner-table td:last-child { font-family: inherit; word-break: normal; }
 .runner-summary .count-green { color: var(--ray-green-light-color); }
 .runner-summary .count-red { color: var(--ray-red-light-color); }
 .runner-summary .meta { color: var(--ray-muted-foreground); font-weight: normal; }
+
+/* ---- {{variables}} in the fields (varfield.js) ------------------------------------------- */
+
+/* The tints behind each {{name}}: read through the fields' shadow roots, so they follow the theme. */
+:root {
+  --var-ok: color-mix(in srgb, var(--ray-green-light-color) 18%, transparent);
+  --var-missing: color-mix(in srgb, var(--ray-red-light-color) 16%, transparent);
+  --var-missing-line: var(--ray-red-light-color);
+}
+
+.var-suggest {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 14rem;
+  max-width: min(30rem, calc(100vw - 16px));
+  max-height: 15rem;
+  overflow-y: auto;
+  padding: var(--ray-space-1);
+  color: var(--ray-popover-foreground);
+  background: var(--ray-popover);
+  border: 1px solid var(--ray-border);
+  border-radius: var(--ray-radius-md);
+  box-shadow: var(--ray-shadow-md);
+  font-size: var(--ray-font-size-xs);
+}
+.var-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: "name value" "source source";
+  column-gap: var(--ray-space-3);
+  padding: var(--ray-space-1) var(--ray-space-2);
+  border-radius: var(--ray-radius-sm);
+  cursor: default;
+}
+.var-option[aria-selected="true"] { background: var(--ray-accent); color: var(--ray-accent-foreground); }
+.var-option .var-name { grid-area: name; font-family: var(--ray-font-mono); font-weight: var(--ray-font-weight-medium); }
+.var-option .var-value {
+  grid-area: value; font-family: var(--ray-font-mono); color: var(--ray-muted-foreground);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: end;
+}
+.var-option .var-source { grid-area: source; color: var(--ray-muted-foreground); }
