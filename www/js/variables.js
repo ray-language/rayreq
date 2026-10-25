@@ -58,9 +58,13 @@ export function renderVariables(tab = activeTab()) {
 
   const alert = $("vars-missing");
   alert.hidden = missing.length === 0 && !(v && v.error);
-  if (v && v.error) alert.textContent = v.error;
-  else if (missing.length) {
+  if (v && v.error) {
+    alert.label = "";
+    alert.textContent = v.error;
+  } else if (missing.length) {
+    // Titled like the response's alert for the same names, in the future tense: not sent yet.
     const key = state.settings.block_unresolved === "1" ? "vars.missingBlocked" : "vars.missing";
+    alert.label = t("response.unresolved");
     alert.textContent = t(key, { names: missing.join(", ") });
   }
 

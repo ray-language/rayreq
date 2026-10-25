@@ -171,7 +171,9 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 .response { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .response-head { display: flex; align-items: center; gap: var(--ray-space-sm); padding: var(--ray-space-xs) var(--ray-space-sm); border-block-end: 1px solid var(--ray-border); min-height: 40px; }
 .metric { font-size: var(--ray-font-size-xs); color: var(--ray-muted-foreground); font-variant-numeric: tabular-nums; }
-#response-error { margin: var(--ray-space-sm); }
+/* The response's alerts: inset from the pane's edges, all alike. */
+.response > ray-alert { margin: var(--ray-space-2) var(--ray-space-3) 0; }
+.response > ray-alert:not([hidden]) ~ ray-tabs { margin-block-start: var(--ray-space-2); }
 .body-tools { margin-block-end: var(--ray-space-xs); }
 pre.raw {
   margin: 0; padding: var(--ray-space-sm); border: 1px solid var(--ray-border); border-radius: var(--ray-radius-md);
@@ -184,6 +186,7 @@ pre.raw.wrap { white-space: pre-wrap; word-break: break-word; }
 
 table.kv-table { width: 100%; border-collapse: collapse; font-size: var(--ray-font-size-xs); }
 table.kv-table td { padding: 4px 6px; border-block-end: 1px solid var(--ray-border); vertical-align: top; }
+table.kv-table th { padding: 4px 6px; text-align: start; font-weight: var(--ray-font-weight-medium); color: var(--ray-muted-foreground); border-block-end: 1px solid var(--ray-border); }
 table.kv-table td:first-child { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); white-space: nowrap; width: 1%; }
 table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: break-all; user-select: text; }
 
@@ -217,7 +220,12 @@ table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: br
 .env-head { flex-wrap: nowrap; align-items: end; }
 .inline-name { display: flex; gap: var(--ray-space-xs); align-items: center; }
 #env-vars, #folder-vars { max-height: 50vh; overflow: auto; }
-.capture-row { display: flex; gap: var(--ray-space-sm); align-items: baseline; padding: var(--ray-space-1) 0; font-size: var(--ray-font-size-sm); }
+.capture-row { display: flex; gap: var(--ray-space-2); align-items: center; padding: var(--ray-space-1) 0; font-size: var(--ray-font-size-sm); }
+/* Test results: the badges share a width, so the descriptions start in one column; what the user
+   typed is code, the words around it are text. */
+.check-row > ray-badge { flex: none; inline-size: 3.5rem; justify-content: center; }
+.capture-row.check-row .what { font-family: inherit; }
+.check-row .what code { font-family: var(--ray-font-mono); font-size: 0.95em; }
 .capture-row .what { font-family: var(--ray-font-mono); }
 .capture-row .value { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); word-break: break-all; }
 
@@ -232,21 +240,28 @@ table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: br
 
 /* ---- cookies ------------------------------------------------------------------------------- */
 
+#vars-list { margin-block-end: var(--ray-space-3); }
 #cookies-list { max-height: 60vh; overflow: auto; }
-.cookies-table th { text-align: start; font-weight: var(--ray-font-weight-medium); padding: 4px 6px; color: var(--ray-muted-foreground); }
 .cookies-table td.val { font-family: var(--ray-font-mono); word-break: break-all; }
 .cookies-table td.meta { color: var(--ray-muted-foreground); white-space: nowrap; }
 
 /* ---- runner -------------------------------------------------------------------------------- */
 
 #runner-list { max-height: 55vh; overflow: auto; }
-.runner-table th { text-align: start; font-weight: var(--ray-font-weight-medium); padding: 4px 6px; color: var(--ray-muted-foreground); }
 .runner-table td { vertical-align: middle; }
 .runner-table td.meta { color: var(--ray-muted-foreground); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.runner-name { all: unset; cursor: pointer; display: inline-flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.runner-name { all: unset; cursor: pointer; display: inline-flex; gap: 6px; align-items: baseline; white-space: nowrap; max-width: 20rem; }
+.runner-name > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+.runner-name .meta { overflow: hidden; text-overflow: ellipsis; }
+/* The result cell is text (kv-table writes its last cell as code). */
+table.runner-table td:last-child { font-family: inherit; word-break: normal; }
 .runner-name:hover span:nth-child(2), .runner-name:focus-visible span:nth-child(2) { text-decoration: underline; }
 .runner-name:focus-visible { outline: 2px solid var(--ray-ring); outline-offset: 2px; border-radius: 4px; }
 .runner-name .meta { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
 .runner-detail { margin-inline-start: 6px; color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
+.runner-delay-label { font-size: var(--ray-font-size-sm); }
+.runner-delay { width: 7rem; }
 .runner-summary { margin: 0; font-weight: var(--ray-font-weight-medium); min-height: 1.4em; }
-.runner-summary[data-result="failed"] { color: var(--ray-red-light-color); }
+.runner-summary .count-green { color: var(--ray-green-light-color); }
+.runner-summary .count-red { color: var(--ray-red-light-color); }
+.runner-summary .meta { color: var(--ray-muted-foreground); font-weight: normal; }

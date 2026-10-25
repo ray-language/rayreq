@@ -436,7 +436,7 @@ export async function send(tab = activeTab()) {
     tab.response = response;
     const applied = (response.captures || []).filter((c) => c.status === "applied").length;
     if (applied) {
-      notify({ message: t("response.captured", { n: applied, env: response.environment }), color: "green", autoClose: 2000 });
+      notify({ message: t(applied === 1 ? "response.capturedOne" : "response.captured", { n: applied, env: response.environment }), color: "green", autoClose: 2000 });
       emit("variables");
     }
   } catch (e) {

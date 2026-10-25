@@ -7,7 +7,7 @@
 import * as A from "./actions.js";
 import { describe, tally } from "./assertions.js";
 import { call } from "./api.js";
-import { t } from "./i18n.js";
+import { formatDuration, t } from "./i18n.js";
 import { emit, nextRun, state, tabOf } from "./state.js";
 import { $, el } from "./util.js";
 
@@ -86,7 +86,7 @@ function show(row, kind, { status = "", time = "", detail = "" } = {}) {
   row.status.textContent = status;
   row.time.textContent = time;
   // replaceChildren, unlike el(), writes a null child as the text "null".
-  row.result.replaceChildren(el("ray-badge", { color: BADGE[kind], size: "sm", "data-result": kind }, t(`runner.${kind}`)));
+  row.result.replaceChildren(el("ray-badge", { color: BADGE[kind], size: "xs", radius: "sm", "normal-case": true, "data-result": kind }, t(`runner.${kind}`)));
   if (detail) row.result.append(el("span", { class: "runner-detail", text: detail }));
 }
 
@@ -174,9 +174,16 @@ export async function run() {
   for (const row of chosen.slice(done)) {
     if (!row.result.firstChild || row.result.querySelector('[data-result="running"]')) show(row, "stopped");
   }
-  const seconds = ((Date.now() - started) / 1000).toFixed(1);
-  $("runner-summary").textContent = t("runner.summary", { ...counts, seconds })
-    + (done < chosen.length ? ` · ${t("runner.notRun", { n: chosen.length - done })}` : "");
+  // Each count in its own color when it is not zero; the time as the rest of the app writes it.
+  const part = (key, n, color) => el("span", { class: n && color ? `count-${color}` : "", text: t(key, { n }) });
+  const parts = [
+    part("runner.countPassed", counts.passed, "green"),
+    part("runner.countFailed", counts.failed, "red"),
+    part("runner.countErrors", counts.errors, "red"),
+    ...done < chosen.length ? [part("runner.notRun", chosen.length - done)] : [],
+    el("span", { class: "meta", text: formatDuration(Date.now() - started) }),
+  ];
+  $("runner-summary").replaceChildren(...parts.flatMap((x, i) => (i ? [" · ", x] : [x])));
   $("runner-summary").dataset.result = counts.failed || counts.errors ? "failed" : "passed";
   c.running = false;
   c.last = counts;

@@ -290,9 +290,12 @@
 <ray-dialog id="runner-dialog" size="xl">
   <ray-stack gap="sm">
     <p class="note" id="runner-note"></p>
-    <ray-group gap="lg" align="end">
+    <ray-group gap="lg" align="center">
       <ray-switch id="runner-stop-on-failure" data-i18n-attr="label:runner.stopOnFailure"></ray-switch>
-      <ray-number-input id="runner-delay" min="0" max="60000" step="100" value="0" size="sm" suffix=" ms" data-i18n-attr="label:runner.delay"></ray-number-input>
+      <ray-group gap="xs" align="center">
+        <span class="runner-delay-label" data-i18n="runner.delay"></span>
+        <ray-number-input id="runner-delay" min="0" max="60000" step="100" value="0" size="xs" suffix=" ms" class="runner-delay" data-i18n-attr="aria-label:runner.delay"></ray-number-input>
+      </ray-group>
     </ray-group>
     <ray-progress id="runner-progress" value="0" size="sm" data-i18n-attr="label:runner.progress"></ray-progress>
     <p id="runner-summary" class="runner-summary" role="status"></p>

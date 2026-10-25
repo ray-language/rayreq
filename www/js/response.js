@@ -15,6 +15,18 @@ const HIGHLIGHT_LIMIT = 300 * 1024; // bigger bodies are shown plain: highlighti
 let wrap = false;
 try { wrap = localStorage.getItem("rayreq.wrap") === "1"; } catch { /* default */ }
 
+/// The i18n key that names why a send got no response, from the HTTP client's message (which
+/// is in English and is shown as well).
+function failureKey(error) {
+  const e = String(error || "").toLowerCase();
+  if (e.includes("refused")) return "failure.refused";
+  if (e.includes("timed out") || e.includes("timeout")) return "failure.timeout";
+  if (e.includes("lookup") || e.includes("resolve") || e.includes("nodename") || e.includes("dns")) return "failure.dns";
+  if (e.includes("certificate") || e.includes("tls") || e.includes("ssl")) return "failure.tls";
+  if (e.includes("redirect")) return "failure.redirects";
+  return "response.failed";
+}
+
 function statusColor(r) {
   if (!r.ok) return "red";
   const s = r.status;
@@ -218,15 +230,16 @@ export function renderResponse() {
   show("response");
   const badge = $("status");
   badge.color = statusColor(r);
-  badge.textContent = r.ok ? `${r.status} ${r.status_text}`.trim() : t("response.failed");
+  badge.textContent = r.ok ? `${r.status} ${r.status_text}`.trim() : t("response.none");
   $("duration").textContent = r.duration_ms != null ? formatDuration(r.duration_ms) : "";
   const wire = r.wire_size && r.wire_size !== r.size ? ` (${formatSize(r.wire_size)})` : "";
   $("size").textContent = r.ok ? formatSize(r.size) + wire : "";
   const err = $("response-error");
   err.hidden = r.ok;
   if (!r.ok) {
-    err.label = t("response.failed");
-    err.textContent = r.error;
+    // The cause in the page's language; the client's own words under it, as they came.
+    err.label = t(failureKey(r.error));
+    err.replaceChildren(el("span", { class: "mono", text: r.error }));
   }
   const unresolved = r.unresolved || [];
   const warn = $("response-unresolved");
@@ -246,9 +259,13 @@ export function renderResponse() {
   if (tab.resTab === "captures" && !(r.captures || []).length) tab.resTab = "body";
   renderAssertions(r);
   if (tab.resTab === "assertions" && !(r.assertions || []).length) tab.resTab = "body";
+  // Without a response there is no body to copy or save, nor headers to count.
+  $("copy-body").closest("ray-tooltip").hidden = !r.ok;
+  $("save-body").closest("ray-tooltip").hidden = !r.ok;
   $("copy-body").disabled = !r.ok || !r.text;
   $("save-body").disabled = !r.ok || !r.history_id || r.kind === "empty";
   $("count-res-headers").textContent = String((r.headers || []).length);
+  $("count-res-headers").hidden = !r.ok;
   $("res-tabs").value = tab.resTab;
   renderBody(tab);
   $("res-headers").replaceChildren(headerTable(r.headers || []));

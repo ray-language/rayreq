@@ -128,13 +128,24 @@ export function describe(a) {
   return `${what} ${t(`assert.op.${a.op}`)}${rest}`;
 }
 
+/// describe() as nodes: what the user typed (a path, an expected value) in code type, the
+/// words around it in the text's.
+function describeNodes(a) {
+  const code = (text) => el("code", { text });
+  const out = [t(`assert.src.${a.source}`)];
+  if (WITH_PATH.includes(a.source)) out.push(" ", code(a.path));
+  out.push(` ${t(`assert.op.${a.op}`)}`);
+  if (!NO_EXPECTED.includes(a.op)) out.push(" ", code(a.expected));
+  return out;
+}
+
 /// One line per assertion of a response: what it checked, its result, and what it saw.
 export function renderResults(box, list) {
   box.replaceChildren();
   for (const a of list) {
-    const row = el("div", { class: "capture-row", "data-status": a.status },
+    const row = el("div", { class: "capture-row check-row", "data-status": a.status },
       el("ray-badge", { size: "xs", radius: "sm", color: COLORS[a.status] || "gray", "normal-case": true }, t(`assert.${a.status}`)),
-      el("span", { class: "what", text: describe(a) }));
+      el("span", { class: "what" }, ...describeNodes(a)));
     const seen = a.status === "error" ? a.detail
       : a.detail ? a.detail
       : a.status === "failed" ? t("assert.got", { value: a.actual }) : "";
