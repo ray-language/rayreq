@@ -2,6 +2,8 @@
 // echo server, on a scratch database. It drives the fields the way a user does (value + the
 // input/change events), then reports check:ok or check:fail:<step> through window.ray.send.
 
+import { getCustomPrimary, setTheme } from "@raylang/elements";
+import { accent } from "./accent.js";
 import * as A from "./actions.js";
 import { call } from "./api.js";
 import { setLanguage, t } from "./i18n.js";
@@ -231,6 +233,26 @@ export async function run(port, sampleFile) {
     window.rayreq.menu("toggle-sidebar");
     await tick();
     expect(!$("layout").collapsed && sidebarWidth() >= 200 && localStorage.getItem("rayreq.sidebar.hidden") === "0", "sidebar shown again");
+
+    // The accent menu: every tone named, the one chosen on the components and remembered, and
+    // the dark tones lighter on the dark theme.
+    const root = document.documentElement;
+    const keptAccent = accent();
+    const keptTheme = root.getAttribute("data-theme") || "system";
+    const tones = [...$("accent-menu").querySelectorAll("ray-menu-item")];
+    expect(tones.length === 7 && tones.every((i) => i.textContent.trim()), `accent tones named: ${tones.map((i) => i.textContent.trim())}`);
+    const pick = (value) => $("accent-menu").dispatchEvent(new CustomEvent("ray-select", { detail: { value } }));
+    setTheme("light");
+    pick("midnight");
+    expect(root.getAttribute("data-primary") === "custom" && getCustomPrimary() === "#1e2b58", `midnight on light: ${getCustomPrimary()}`);
+    expect(localStorage.getItem("rayreq.accent") === "midnight", "accent remembered");
+    expect(tones.filter((i) => i.hasAttribute("data-current")).map((i) => i.getAttribute("value")).join() === "midnight", "only the chosen tone is marked");
+    setTheme("dark");
+    expect(getCustomPrimary() === "#4a63b8", `midnight on dark: ${getCustomPrimary()}`);
+    pick("pine");
+    expect(getCustomPrimary() === "#0f6b5c", `pine on dark: ${getCustomPrimary()}`);
+    setTheme(keptTheme);
+    pick(keptAccent);
 
     // A right click reads the items of the row clicked, not those of the previous one.
     const menu = $("tree-menu");

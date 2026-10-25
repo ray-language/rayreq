@@ -2,6 +2,7 @@
 // program's menus (window.rayreq.menu) and its "may I quit?" (window.rayreq.requestQuit).
 
 import { enableRaylang, notify } from "@raylang/elements";
+import { initAccent } from "./accent.js";
 import * as A from "./actions.js";
 import { available, call, log } from "./api.js";
 import { initEditor, loadEditor } from "./editor.js";
@@ -212,6 +213,7 @@ function restoreSidebar() {
 async function boot() {
   quietContextMenu();
   state.host = await enableRaylang();
+  initAccent();
   if (!available()) {
     setLanguage(pickLanguage(null));
     $("empty-text").textContent = t("browser.notice");
