@@ -85,9 +85,9 @@ function setRunning(running) {
 function show(row, kind, { status = "", time = "", detail = "" } = {}) {
   row.status.textContent = status;
   row.time.textContent = time;
-  row.result.replaceChildren(
-    el("ray-badge", { color: BADGE[kind], size: "sm", "data-result": kind }, t(`runner.${kind}`)),
-    detail ? el("span", { class: "runner-detail", text: detail }) : null);
+  // replaceChildren, unlike el(), writes a null child as the text "null".
+  row.result.replaceChildren(el("ray-badge", { color: BADGE[kind], size: "sm", "data-result": kind }, t(`runner.${kind}`)));
+  if (detail) row.result.append(el("span", { class: "runner-detail", text: detail }));
 }
 
 /// What one answer means for the run.

@@ -21,6 +21,27 @@ function type(element, value, event = "input") {
   element.dispatchEvent(new Event(event, { bubbles: true, composed: true }));
 }
 
+/// Every visible cell of the rows in `box` lies inside it and is wide enough to use (a grid
+/// wider than its pane clips cells, or squeezes one to nothing).
+function fits(box, what) {
+  const outer = box.getBoundingClientRect();
+  for (const row of box.querySelectorAll(".kv-row")) {
+    for (const cell of row.children) {
+      if (getComputedStyle(cell).visibility === "hidden") continue;
+      const r = cell.getBoundingClientRect();
+      expect(r.left >= outer.left - 1 && r.right <= outer.right + 1 && r.width >= 24,
+        `${what}: ${cell.tagName.toLowerCase()} [${getComputedStyle(row).gridTemplateColumns}] at ${Math.round(r.left)}–${Math.round(r.right)} in a table at ${Math.round(outer.left)}–${Math.round(outer.right)}`);
+    }
+  }
+}
+
+/// The selected tab of a <ray-tabs> is inside the visible part of its scrolling list.
+function inView(tabs, what) {
+  const list = tabs.shadowRoot.querySelector('[part="list"]').getBoundingClientRect();
+  const r = tabs.querySelector("ray-tab[data-active]").getBoundingClientRect();
+  expect(r.left >= list.left - 1 && r.right <= list.right + 1, `${what}: the selected tab is scrolled out of view`);
+}
+
 async function until(cond, what, ms = 8000) {
   const end = Date.now() + ms;
   while (!cond()) {
@@ -321,6 +342,9 @@ export async function run(port, sampleFile) {
     // Assertions typed in the editor's rows: one passes, one fails, and the response says which.
     const urlBefore = tab.draft.url;
     type($("url"), "{{base}}/echo");
+    $("req-tabs").value = "assertions";
+    await tick();
+    inView($("req-tabs"), "request tabs");
     const assertRow = (i) => $("assertions").querySelectorAll(".kv-row")[i].children;
     let [, src, path, op, expected] = assertRow(0);
     type(src, "json", "change");
@@ -334,6 +358,7 @@ export async function run(port, sampleFile) {
     type(expected, "{{x}}");
     expect(tab.draft.assertions.length === 2 && tab.draft.assertions[1].op === "ne" && $("count-assertions").textContent === "2",
       `assertion rows: ${JSON.stringify(tab.draft.assertions)}`);
+    fits($("assertions"), "assertions");
     await A.send(tab);
     let checks = tab.response.assertions || [];
     expect(checks.length === 2 && checks[0].status === "passed" && checks[1].status === "passed",
@@ -363,6 +388,7 @@ export async function run(port, sampleFile) {
     const results = runRows().map((r) => r.querySelector("[data-result]")?.dataset.result);
     expect(counts && counts.passed === 2 && counts.failed === 1 && counts.errors === 0 && results.join() === "passed,passed,failed",
       `run: ${JSON.stringify(counts)} ${results}`);
+    expect(!$("runner-list").textContent.includes("null"), `a result without detail: ${$("runner-list").textContent}`);
     expect($("runner-summary").dataset.result === "failed" && runRows()[2].textContent.includes("404"), "the summary and the 404");
     // Unchecked steps are skipped; stopping at the first failure leaves the rest unsent.
     runRows()[1].querySelector("ray-checkbox").checked = false;
@@ -435,6 +461,9 @@ export async function run(port, sampleFile) {
     kindSelect.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     typeIn(fileRow, 1, sampleFile);
     expect(tab5.draft.method === "GET" && tab5.draft.parts.length === 2 && tab5.draft.parts[1].file, `parts: ${JSON.stringify(tab5.draft.parts)}`);
+    $("req-tabs").value = "body";
+    await tick();
+    fits($("parts"), "multipart parts");
     $("method").value = "POST";
     $("method").dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     await A.send(tab5);

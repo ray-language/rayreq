@@ -60,6 +60,15 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 .top-actions { flex: none; flex-wrap: nowrap; }
 .tabstrip { display: flex; align-items: stretch; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; height: 100%; }
 .tabstrip::-webkit-scrollbar { display: none; }
+/* A tab bar wider than its room scrolls sideways (util.js sideScroller): the edge that hides
+   tabs fades out. */
+.tabstrip, .pane-tabs::part(list) {
+  --fade: linear-gradient(to right, transparent, #000 var(--fade-start, 0px), #000 calc(100% - var(--fade-end, 0px)), transparent);
+  -webkit-mask-image: var(--fade); mask-image: var(--fade);
+}
+[data-more-start] { --fade-start: 2.5rem; }
+[data-more-end] { --fade-end: 2.5rem; }
+.pane-tabs > ray-tab { padding-inline: var(--ray-space-3); }
 .tab {
   display: flex; align-items: center; gap: var(--ray-space-xs); max-width: 14rem; flex: none;
   padding-inline: var(--ray-space-sm) var(--ray-space-xs); margin-block: 6px;
@@ -90,8 +99,50 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 .kv-row ray-input::part(input) { font-family: var(--ray-font-mono); font-size: var(--ray-font-size-xs); }
 .kv-row.off ray-input { opacity: 0.55; }
 .kv-row .spacer { width: 28px; }
-.kv-row.asserts { grid-template-columns: auto 7rem 1fr 8.5rem 1fr auto; }
-.kv-row.parts { grid-template-columns: auto 1fr 6.5rem 1.4fr 0.8fr auto; }
+.kv { container-type: inline-size; }
+.kv-row > ray-input, .kv-row > ray-select, .kv-row > .part-value { min-width: 0; }
+/* ray-icon-button has no intrinsic width in WebKit (its inner button is flex: 1): an auto
+   track would shrink it to nothing. size="sm" is this square. */
+.kv-row > ray-icon-button { width: var(--ray-control-height-sm); }
+
+/* Assertions and multipart parts have more cells than a half pane holds: on one line when the
+   table is wide, else on two (what is checked or sent, then how), each row set off by a rule. */
+.kv-row.asserts, .kv-row.parts { row-gap: var(--ray-space-1); }
+.kv-row.asserts {
+  grid-template-columns: auto 8.5rem minmax(0, 1fr) auto;
+  grid-template-areas: "box source path remove" ". op expected .";
+}
+.kv-row.asserts > :nth-child(1), .kv-row.parts > :nth-child(1) { grid-area: box; }
+.kv-row.asserts > :nth-child(2) { grid-area: source; }
+.kv-row.asserts > :nth-child(3) { grid-area: path; }
+.kv-row.asserts > :nth-child(4) { grid-area: op; }
+.kv-row.asserts > :nth-child(5) { grid-area: expected; }
+.kv-row.asserts > :nth-child(6), .kv-row.parts > :nth-child(6) { grid-area: remove; }
+.kv-row.parts {
+  grid-template-columns: auto minmax(0, 1fr) 10rem auto;
+  grid-template-areas: "box key kind remove" ". value ctype .";
+}
+.kv-row.parts > :nth-child(2) { grid-area: key; }
+.kv-row.parts > :nth-child(3) { grid-area: kind; }
+.kv-row.parts > :nth-child(4) { grid-area: value; }
+.kv-row.parts > :nth-child(5) { grid-area: ctype; }
+.kv-row.asserts + .kv-row.asserts, .kv-row.parts + .kv-row.parts {
+  border-block-start: 1px solid var(--ray-border); padding-block-start: var(--ray-space-xs);
+}
+@container (min-width: 44rem) {
+  .kv-row.asserts {
+    grid-template-columns: auto 7.5rem minmax(0, 1fr) 8.5rem minmax(0, 1fr) auto;
+    grid-template-areas: "box source path op expected remove";
+  }
+  .kv-row.asserts + .kv-row.asserts { border-block-start: 0; padding-block-start: 0; }
+}
+@container (min-width: 46rem) {
+  .kv-row.parts {
+    grid-template-columns: auto minmax(0, 1fr) 6.5rem minmax(0, 1.4fr) minmax(0, 0.8fr) auto;
+    grid-template-areas: "box key kind value ctype remove";
+  }
+  .kv-row.parts + .kv-row.parts { border-block-start: 0; padding-block-start: 0; }
+}
 .part-value { display: flex; gap: 2px; align-items: center; min-width: 0; }
 .part-value ray-input { flex: 1; min-width: 0; }
 .field-error { color: var(--ray-destructive); font-size: var(--ray-font-size-xs); margin: 0; }

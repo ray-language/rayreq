@@ -11,7 +11,7 @@ import { initRunner, openRunner } from "./runner.js";
 import { activeTab, emit, on, state } from "./state.js";
 import { initTabs } from "./tabs.js";
 import { initTree, renderProjects } from "./tree.js";
-import { $ } from "./util.js";
+import { $, sideScroller } from "./util.js";
 import { initVariables, openCookies, openEnvironments } from "./variables.js";
 
 addEventListener("error", (e) => log(`${e.message} @${e.filename}:${e.lineno}:${e.colno}`));
@@ -176,6 +176,11 @@ async function boot() {
   if (state.settings.language !== lang) A.setSetting("language", lang).catch(() => {});
   $("status-version").textContent = `rayreq ${state.version}`;
   $("status-hint").textContent = t("status.hint");
+
+  // Tab bars that do not fit scroll sideways, with a faded edge where tabs are hidden.
+  await customElements.whenDefined("ray-tabs");
+  sideScroller($("tabs"));
+  for (const id of ["req-tabs", "res-tabs"]) sideScroller($(id), $(id).shadowRoot.querySelector('[part="list"]'));
 
   initTree();
   initTabs();
