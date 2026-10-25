@@ -3,6 +3,14 @@
 
 html, body { height: 100%; margin: 0; }
 body { background: var(--ray-background); color: var(--ray-foreground); overflow: hidden; }
+/* An app, not a page: its chrome is not text to select (a right click would select the word
+   under it). What is worth copying opts back in; fields stay editable regardless. WebKit only
+   honors the prefixed property, which it also inherits into shadow roots. */
+body { -webkit-user-select: none; user-select: none; }
+pre.raw, ray-code, table.kv-table td:not(:first-child), #url-resolved, .response > ray-alert, .runner-detail,
+*::part(input), *::part(textarea) {
+  -webkit-user-select: text; user-select: text;
+}
 
 .grow { flex: 1 1 auto; min-width: 0; }
 .fill { height: 100%; }
@@ -24,9 +32,6 @@ ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: col
 ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: none; }
 #tree-menu, #tree-menu > [slot="trigger"] { display: block; min-height: 100%; }
 
-/* Not text to select: a right click would otherwise select the word under it (WebKit only
-   honors the prefixed property). */
-.tree, .tabstrip { -webkit-user-select: none; user-select: none; }
 .tree { min-height: 12rem; font-size: var(--ray-font-size-sm); outline: none; }
 /* A folder's chevron + icon and a request's method tag take the same width, so names at one
    depth start at one x. */
@@ -180,7 +185,7 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 pre.raw {
   margin: 0; padding: var(--ray-space-sm); border: 1px solid var(--ray-border); border-radius: var(--ray-radius-md);
   background: var(--ray-code-background); font-family: var(--ray-font-mono);
-  font-size: var(--ray-font-size-xs); overflow: auto; white-space: pre; -webkit-user-select: text; user-select: text;
+  font-size: var(--ray-font-size-xs); overflow: auto; white-space: pre;
 }
 pre.raw.wrap { white-space: pre-wrap; word-break: break-word; }
 .preview-image { max-width: 100%; border: 1px solid var(--ray-border); border-radius: var(--ray-radius-md); background: repeating-conic-gradient(var(--ray-muted) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
@@ -190,7 +195,7 @@ table.kv-table { width: 100%; border-collapse: collapse; font-size: var(--ray-fo
 table.kv-table td { padding: 4px 6px; border-block-end: 1px solid var(--ray-border); vertical-align: top; }
 table.kv-table th { padding: 4px 6px; text-align: start; font-weight: var(--ray-font-weight-medium); color: var(--ray-muted-foreground); border-block-end: 1px solid var(--ray-border); }
 table.kv-table td:first-child { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); white-space: nowrap; width: 1%; }
-table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: break-all; -webkit-user-select: text; user-select: text; }
+table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: break-all; }
 
 .history-row {
   display: grid; grid-template-columns: auto auto 1fr auto auto; gap: var(--ray-space-sm); align-items: center;

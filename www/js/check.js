@@ -174,9 +174,25 @@ export async function run(port, sampleFile) {
     delete menu.popupNative;
     expect(read.length === 2 && read[0].includes("duplicate") && !read[0].includes("new-request"), `request menu: ${read[0]}`);
     expect(read[1].includes("new-request") && !read[1].includes("duplicate"), `folder menu: ${read[1]}`);
-    // Nor does a right click select the row's text (WebKit reads only the prefixed property).
-    const rowStyle = getComputedStyle(document.querySelector("#tree .tree-row .name"));
-    expect((rowStyle.webkitUserSelect || rowStyle.userSelect) === "none", `tree text selectable: ${rowStyle.webkitUserSelect}`);
+    // A right click selects no text in the app's chrome (WebKit reads only the prefixed
+    // property), while what is worth copying stays selectable; the webview's own menu shows
+    // only on fields.
+    const selectable = (node) => {
+      const cs = getComputedStyle(node);
+      return (cs.webkitUserSelect || cs.userSelect) !== "none";
+    };
+    for (const id of ["status-hint", "req-tabs", "tabs"]) expect(!selectable($(id)), `${id} text selectable`);
+    expect(!selectable(document.querySelector("#tree .tree-row .name")), "tree text selectable");
+    expect(selectable($("url-resolved")), "the resolved URL can be copied");
+    expect(selectable($("url").control) && selectable($("body").control), "the fields' text can be selected");
+    const menuOn = (node) => {
+      const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true });
+      node.dispatchEvent(ev);
+      return !ev.defaultPrevented;
+    };
+    window.getSelection().removeAllRanges();
+    expect(!menuOn($("status-hint")), "the webview menu on the status bar");
+    expect(menuOn($("url").control), "the webview menu on a field");
 
     // Cancelling the dialog creates nothing.
     const cancelled = A.newFolder();

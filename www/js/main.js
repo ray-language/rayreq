@@ -158,7 +158,20 @@ async function changeLanguage(lang) {
   await A.setSetting("language", lang);
 }
 
+/// The webview's own context menu (Look Up, Inspect Element…) only where it helps: on a field,
+/// or over selected text, for its Cut/Copy/Paste. Elsewhere a right click shows nothing, or the
+/// app's own menu (which prevents the default itself).
+function quietContextMenu() {
+  document.addEventListener("contextmenu", (e) => {
+    if (e.defaultPrevented) return;
+    const editable = e.composedPath().some((n) => n instanceof HTMLElement && (n.localName === "input" || n.localName === "textarea" || n.isContentEditable));
+    const selected = String(window.getSelection() || "") !== "";
+    if (!editable && !selected) e.preventDefault();
+  });
+}
+
 async function boot() {
+  quietContextMenu();
   state.host = await enableRaylang();
   if (!available()) {
     setLanguage(pickLanguage(null));
