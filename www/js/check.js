@@ -357,6 +357,10 @@ export async function run(port, sampleFile) {
     const keyInputs = authBox.querySelectorAll("ray-input, ray-password-input");
     const byLabel = (key) => [...keyInputs].find((x) => x.dataset.labelKey === key);
     type(byLabel("auth.key"), "api_key");
+    // A monospaced field types in mono; its label stays in the UI font.
+    const keyField = byLabel("auth.key");
+    const fontOf = (part) => getComputedStyle(keyField.shadowRoot.querySelector(`[part="${part}"]`)).fontFamily;
+    expect(fontOf("input") !== fontOf("label") && !/mono/i.test(fontOf("label")), `label font: ${fontOf("label")}`);
     type(byLabel("auth.value"), "{{x}}");
     const segs = authBox.querySelectorAll("ray-segmented-control");
     type(segs[0], "query", "change");

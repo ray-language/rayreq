@@ -132,6 +132,10 @@ const STRINGS = {
     "palette.placeholder": "Search requests and commands…",
     "palette.requests": "Requests",
     "palette.actions": "Actions",
+    "palette.label": "Command palette",
+    "palette.navigate": "navigate",
+    "palette.run": "run",
+    "palette.close": "close",
     "palette.empty": "Nothing found",
     "error.prefix": "Error",
     "browser.notice": "Open this page inside the RayReq app.",
@@ -490,6 +494,10 @@ const STRINGS = {
     "palette.placeholder": "Buscar peticiones y comandos…",
     "palette.requests": "Peticiones",
     "palette.actions": "Acciones",
+    "palette.label": "Paleta de comandos",
+    "palette.navigate": "moverse",
+    "palette.run": "ejecutar",
+    "palette.close": "cerrar",
     "palette.empty": "No se encontró nada",
     "error.prefix": "Error",
     "browser.notice": "Abre esta página dentro de la app RayReq.",
@@ -653,8 +661,8 @@ const STRINGS = {
     "env.tools": "Entornos y cookies",
     "cookies.manage": "Cookies…",
     "cookies.title": "Cookies",
-    "cookies.note": "El cookie jar del entorno «{name}». Las cookies de sesión (sin caducidad) se borran al abrir RayReq.",
-    "cookies.empty": "Aún no hay cookies. Las respuestas que ponen cookies llenan este jar.",
+    "cookies.note": "Las cookies guardadas del entorno «{name}». Las de sesión (sin caducidad) se borran al abrir RayReq.",
+    "cookies.empty": "Aún no hay cookies. Aquí se guardan las que pongan las respuestas.",
     "cookies.domain": "Dominio",
     "cookies.name": "Nombre",
     "cookies.value": "Valor",
@@ -667,7 +675,7 @@ const STRINGS = {
     "cookies.clear": "Borrar todas",
     "cookies.clearTitle": "¿Borrar todas las cookies de «{name}»?",
     "cookies.clearText": "Las peticiones dejan de enviarlas hasta que una respuesta las vuelva a poner.",
-    "settings.cookies": "Usar el cookie jar",
+    "settings.cookies": "Usar las cookies guardadas",
     "settings.cookiesHelp": "Enviar las cookies del entorno activo y guardar las que ponga la respuesta (también en las redirecciones).",
     "response.cookiesIgnored": "Cookies ignoradas",
     "dialog.close": "Cerrar",
@@ -772,4 +780,13 @@ export function formatDuration(ms) {
 
 export function formatTime(ms) {
   return new Date(ms).toLocaleString(lang, { dateStyle: "short", timeStyle: "medium" });
+}
+
+/// A moment in a list: the time alone today, the day and month (no year) and the time before.
+export function formatWhen(ms) {
+  const d = new Date(ms);
+  const today = d.toDateString() === new Date().toDateString();
+  return today
+    ? d.toLocaleTimeString(lang, { timeStyle: "medium" })
+    : d.toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }

@@ -129,7 +129,8 @@ export class AuthEditor {
         this.input("scope", "oauth.scope"),
         this.passwordOnly),
     };
-    this.info = el("p", { class: "note" });
+    // Hidden until there is something to say (an empty note still takes the stack's gap).
+    this.info = el("p", { class: "note", hidden: true });
     this.container.replaceChildren(el("ray-stack", { gap: "md", class: "auth-editor" },
       this.kind, ...Object.values(this.groups), this.info, this.tokenBox));
     this.relabel();

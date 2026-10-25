@@ -6,7 +6,7 @@ import { notify } from "@raylang/elements";
 import * as A from "./actions.js";
 import { renderResults, tally } from "./assertions.js";
 import { call } from "./api.js";
-import { formatDuration, formatSize, formatTime, t } from "./i18n.js";
+import { formatDuration, formatSize, formatTime, formatWhen, t } from "./i18n.js";
 import { activeTab, emit, on } from "./state.js";
 import { $, el } from "./util.js";
 
@@ -157,6 +157,16 @@ function renderCaptures(r) {
   }
 }
 
+/// The path and query of a URL, or the URL as it is when it does not parse.
+function pathOf(url) {
+  try {
+    const u = new URL(url);
+    return u.pathname + u.search;
+  } catch {
+    return url;
+  }
+}
+
 /// A status word as a badge's label: capitalized like the tests' and the runner's ("Pasa",
 /// "Correcta"); the same words stay lowercase inside the runner's sentences.
 const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -199,10 +209,14 @@ async function renderHistory(tab) {
   const current = tab.response && tab.response.history_id;
   for (const h of tab.history) {
     const status = el("ray-badge", { size: "xs", radius: "sm", color: statusColor(h), "normal-case": true }, h.ok ? String(h.status) : "ERR");
-    const b = el("button", { class: "history-row", type: "button", "aria-current": h.id === current ? "true" : "false" },
-      el("span", { class: "metric", text: formatTime(h.executed_at) }),
+    // The host is the same in every row: the path is what tells them apart (all of it on hover).
+    const b = el("button", {
+      class: "history-row", type: "button", "aria-current": h.id === current ? "true" : "false",
+      title: `${formatTime(h.executed_at)} · ${h.method} ${h.url}`,
+    },
+      el("span", { class: "metric", text: formatWhen(h.executed_at) }),
       status,
-      el("span", { class: "url", text: `${h.method} ${h.url}` }),
+      el("span", { class: "url", text: `${h.method} ${pathOf(h.url)}` }),
       el("span", { class: "metric", text: formatDuration(h.duration_ms) }),
       el("span", { class: "metric", text: formatSize(h.size) }),
     );

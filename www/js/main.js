@@ -117,6 +117,13 @@ function openPalette() {
   const p = $("palette");
   p.placeholder = t("palette.placeholder");
   p.emptyLabel = t("palette.empty");
+  p.label = t("palette.label");
+  // The hints under the list are fixed English text in the component: say them in the
+  // page's language (each is a <b> key and a text node).
+  const hints = p.shadowRoot.querySelectorAll('[part="hint"] > span');
+  ["palette.navigate", "palette.run", "palette.close"].forEach((key, i) => {
+    if (hints[i] && hints[i].lastChild) hints[i].lastChild.textContent = ` ${t(key)}`;
+  });
   p.actions = paletteActions();
   p.show();
 }

@@ -300,7 +300,7 @@ async function renderCookies() {
   table.append(el("tr", {}, ...["cookies.domain", "cookies.name", "cookies.value", "cookies.path", "cookies.expires", "cookies.flags", null]
     .map((k) => el("th", { text: k ? t(k) : "" }))));
   for (const c of list) {
-    const del = el("ray-icon-button", { size: "sm", variant: "subtle", label: t("cookies.delete") }, el("ray-icon", { name: "close" }));
+    const del = el("ray-icon-button", { size: "xs", variant: "subtle", color: "gray", label: t("cookies.delete") }, el("ray-icon", { name: "close" }));
     del.addEventListener("click", () => A.guard(async () => {
       await call("cookies.delete", { environment_id: env.id, name: c.name, domain: c.domain, path: c.path });
       await renderCookies();
@@ -312,7 +312,7 @@ async function renderCookies() {
       el("td", { class: "meta", text: c.path }),
       el("td", { class: "meta", text: c.expires ? formatTime(c.expires) : t("cookies.session") }),
       el("td", { class: "meta", text: cookieFlags(c) }),
-      el("td", {}, del)));
+      el("td", { class: "row-action" }, del)));
   }
   box.append(table);
 }

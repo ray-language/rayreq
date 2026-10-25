@@ -15,7 +15,10 @@ pre.raw, ray-code, table.kv-table td:not(:first-child), #url-resolved, .response
 .grow { flex: 1 1 auto; min-width: 0; }
 .fill { height: 100%; }
 .center { display: grid; place-items: center; }
-.mono, .mono::part(input), .code-area::part(textarea) { font-family: var(--ray-font-mono); }
+/* On a field, only what is typed is monospaced: its label and description stay in the UI font. */
+.mono:not(ray-input, ray-password-input, ray-textarea), .mono::part(input), .mono::part(textarea), .code-area::part(textarea) {
+  font-family: var(--ray-font-mono);
+}
 .code-area::part(textarea) { font-size: var(--ray-font-size-xs); tab-size: 2; }
 [hidden] { display: none !important; }
 
@@ -230,6 +233,9 @@ table.kv-table td { padding: 4px 6px; border-block-end: 1px solid var(--ray-bord
 table.kv-table th { padding: 4px 6px; text-align: start; font-weight: var(--ray-font-weight-medium); color: var(--ray-muted-foreground); border-block-end: 1px solid var(--ray-border); }
 table.kv-table td:first-child { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); white-space: nowrap; width: 1%; }
 table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: break-all; }
+/* A row's own button (delete) keeps the row as tall as its text and sits at its end. */
+table.kv-table td.row-action { width: 1%; padding-block: 0; vertical-align: middle; }
+table.kv-table td.row-action > ray-icon-button { width: 1.5rem; }
 
 .history-row {
   display: grid; grid-template-columns: auto auto 1fr auto auto; gap: var(--ray-space-sm); align-items: center;
@@ -240,6 +246,7 @@ table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: br
 .history-row[aria-current="true"] { background: var(--ray-primary-light); }
 .history-row .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); }
 .history-head { display: flex; justify-content: space-between; align-items: center; margin-block-end: var(--ray-space-xs); }
+.history-head > .note { margin: 0; }
 
 .hops { margin: 0 0 var(--ray-space-sm); padding: 0; list-style: none; font-size: var(--ray-font-size-xs); }
 .hops li { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); padding-block: 2px; }

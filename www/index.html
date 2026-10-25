@@ -218,9 +218,9 @@
 <ray-dialog id="env-dialog" size="lg" data-i18n-attr="label:env.dialogTitle">
   <ray-stack gap="md">
     <ray-group gap="xs" class="env-head">
-      <ray-select id="env-edit" size="sm" class="grow" data-i18n-attr="label:env.editing"></ray-select>
+      <ray-select id="env-edit" size="xs" class="grow" data-i18n-attr="label:env.editing"></ray-select>
       <ray-menu id="env-menu" placement="bottom-end">
-        <ray-icon-button slot="trigger" size="sm" variant="default" label="Environment actions" data-i18n-attr="label:env.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
+        <ray-icon-button slot="trigger" size="xs" variant="default" label="Environment actions" data-i18n-attr="label:env.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
         <ray-menu-item value="activate"><span data-i18n="env.activate"></span></ray-menu-item>
         <ray-menu-divider></ray-menu-divider>
         <ray-menu-item value="new"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="env.new"></span></ray-menu-item>
@@ -231,9 +231,9 @@
       </ray-menu>
     </ray-group>
     <form id="env-name-row" class="inline-name" hidden>
-      <ray-input id="env-name" size="sm" class="grow" data-i18n-attr="aria-label:dialog.name,placeholder:dialog.name"></ray-input>
-      <ray-button id="env-name-ok" type="submit" size="sm"></ray-button>
-      <ray-button id="env-name-cancel" type="button" size="sm" variant="default"><span data-i18n="dialog.cancel"></span></ray-button>
+      <ray-input id="env-name" size="xs" class="grow" data-i18n-attr="aria-label:dialog.name,placeholder:dialog.name"></ray-input>
+      <ray-button id="env-name-ok" type="submit" size="xs"></ray-button>
+      <ray-button id="env-name-cancel" type="button" size="xs" variant="default"><span data-i18n="dialog.cancel"></span></ray-button>
     </form>
     <p class="note" data-i18n="env.help"></p>
     <div id="env-vars" class="kv"></div>
@@ -244,7 +244,7 @@
 
 <ray-dialog id="folder-vars-dialog" size="lg">
   <ray-stack gap="md">
-    <ray-select id="folder-vars-scope" size="sm" data-i18n-attr="label:folder.varsScope"></ray-select>
+    <ray-select id="folder-vars-scope" size="xs" data-i18n-attr="label:folder.varsScope"></ray-select>
     <p class="note" id="folder-vars-help"></p>
     <div id="folder-vars" class="kv"></div>
   </ray-stack>
@@ -263,7 +263,7 @@
   <p class="note" id="cookies-note"></p>
   <div id="cookies-list"></div>
   <ray-button slot="footer" id="cookies-clear" variant="subtle" color="red"><span data-i18n="cookies.clear"></span></ray-button>
-  <ray-button slot="footer" data-dialog-close><span data-i18n="dialog.close"></span></ray-button>
+  <ray-button slot="footer" data-dialog-close autofocus><span data-i18n="dialog.close"></span></ray-button>
 </ray-dialog>
 
 <ray-dialog id="curl-dialog" size="lg" data-i18n-attr="label:curl.importTitle">
@@ -283,7 +283,7 @@
       <ray-button id="openapi-file" variant="default" size="sm"><ray-icon slot="left" name="file"></ray-icon><span data-i18n="openapi.chooseFile"></span></ray-button>
       <span id="openapi-file-name" class="note"></span>
     </ray-group>
-    <ray-textarea id="openapi-text" class="mono code-area" rows="12" spellcheck="false" autocapitalize="off" data-i18n-attr="aria-label:openapi.title,placeholder:openapi.placeholder"></ray-textarea>
+    <ray-textarea id="openapi-text" autofocus class="mono code-area" rows="12" spellcheck="false" autocapitalize="off" data-i18n-attr="aria-label:openapi.title,placeholder:openapi.placeholder"></ray-textarea>
     <p id="openapi-error" class="field-error" role="alert" hidden></p>
   </ray-stack>
   <ray-button slot="footer" variant="default" data-dialog-close><span data-i18n="dialog.cancel"></span></ray-button>
