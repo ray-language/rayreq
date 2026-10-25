@@ -524,6 +524,16 @@ export async function run(port, sampleFile) {
     expect(checks[1].status === "failed" && checks[1].actual === "1" && !$("res-assertions-tab").hidden
       && $("count-res-assertions").textContent === "1/2"
       && $("res-assertions").querySelector('[data-status="failed"]'), `a failing assertion: ${JSON.stringify(checks)}`);
+    // With captures and tests shown too, the response's tabs fit its pane at the default layout.
+    // In both languages (Spanish labels are the longer ones).
+    const resTabs = [...$("res-tabs").querySelectorAll(":scope > ray-tab")];
+    for (const lang of ["en", "es"]) {
+      setLanguage(lang);
+      const resWidth = resTabs.reduce((sum, x) => sum + x.getBoundingClientRect().width, 0);
+      expect(resTabs.filter((x) => !x.hidden).length === 6 && resWidth <= 0.47 * (1280 - 240 - 12) - 12,
+        `the response tabs need ${Math.round(resWidth)} px in ${lang} (${resTabs.filter((x) => !x.hidden).length} shown)`);
+    }
+    setLanguage("en");
     assertRow(1)[5].click();
     assertRow(0)[5].click();
     expect(tab.draft.assertions.length === 0, "assertion rows removed");
@@ -620,6 +630,15 @@ export async function run(port, sampleFile) {
     $("req-tabs").value = "body";
     await tick();
     fits($("parts"), "multipart parts");
+    // A file part shows the end of its path (the file's name) once it is not being edited.
+    const pathField = fileRow.querySelectorAll("ray-input")[1];
+    pathField.value = `/a/very/long/folder/that/goes/on/and/on/and/on/before/the/name/${"x".repeat(40)}/sample.txt`;
+    pathField.dispatchEvent(new Event("focusout", { bubbles: true, composed: true }));
+    await frames();
+    await frames();
+    const pc = pathField.control;
+    expect(pc.scrollWidth > pc.clientWidth && pc.scrollLeft + pc.clientWidth >= pc.scrollWidth - 1, `path scrolled ${pc.scrollLeft}/${pc.scrollWidth - pc.clientWidth}`);
+    type(pathField, sampleFile);
     $("method").value = "POST";
     $("method").dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     await A.send(tab5);

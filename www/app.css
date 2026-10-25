@@ -30,6 +30,11 @@ ray-statusbar { background: var(--app-chrome); }
 ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: column; }
 /* The sidebar and the rest side by side: the divider resizes the sidebar, collapsing it hides it. */
 .layout { flex: 1 1 auto; min-height: 0; height: 100%; }
+/* The divider's track is wider than its line: its sidebar half takes the sidebar's tone, so the
+   frame meets the line with no strip of page between them. */
+.layout::part(divider) { background: linear-gradient(to right, var(--app-chrome) 50%, transparent 50%); }
+/* Toasts rise above the status bar instead of covering its hints. */
+ray-toaster { bottom: 1.5rem; }
 #main { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 
 /* ---- sidebar -------------------------------------------------------------------------- */
@@ -208,6 +213,8 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 .field-error { color: var(--ray-destructive); font-size: var(--ray-font-size-xs); margin: 0; }
 /* The request's forms (auth, settings) as wide as one reads comfortably, not the whole pane. */
 .settings, .auth-pane { max-width: 28rem; }
+/* A number of a few digits in a field of a few digits' width. */
+.settings ray-number-input::part(wrapper) { max-width: 9rem; }
 
 /* ---- response -------------------------------------------------------------------------- */
 

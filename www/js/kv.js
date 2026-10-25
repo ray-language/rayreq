@@ -134,7 +134,19 @@ export class PartsEditor extends KvEditor {
     const ctype = el("ray-input", { size: "xs", placeholder: t("parts.type"), "aria-label": t("parts.type"), spellcheck: "false", autocapitalize: "off" });
     ctype.value = row.content_type;
     if (this.variables) varField(ctype, this.variables);
+    // A path's end (the file's name) is what tells it apart: shown when the field is not being
+    // edited, the whole path on hover.
+    const showEnd = () => {
+      value.title = row.file ? row.value : "";
+      if (!row.file || value.matches(":focus-within")) return;
+      requestAnimationFrame(() => {
+        if (value.control) value.control.scrollLeft = value.control.scrollWidth;
+      });
+    };
+    value.addEventListener("focusout", () => setTimeout(showEnd, 0));
+    value.addEventListener("input", () => { value.title = row.file ? value.value : ""; });
     const showKind = () => {
+      showEnd();
       value.placeholder = t(row.file ? "parts.path" : "kv.value");
       value.setAttribute("aria-label", value.placeholder);
       pick.hidden = !row.file || !hostCan("pick_files");
@@ -156,6 +168,7 @@ export class PartsEditor extends KvEditor {
       if (!files.length) return;
       value.value = files[0].path;
       touched();
+      showEnd();
     });
     ctype.addEventListener("keydown", (e) => {
       if (e.key === "Enter") e.preventDefault();
