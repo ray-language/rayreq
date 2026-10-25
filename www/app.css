@@ -19,6 +19,11 @@ pre.raw, ray-code, table.kv-table td:not(:first-child), #url-resolved, .response
 .code-area::part(textarea) { font-size: var(--ray-font-size-xs); tab-size: 2; }
 [hidden] { display: none !important; }
 
+/* The frame (header, sidebar, status bar) in one tone around the white working area. */
+:root { --app-chrome: color-mix(in srgb, var(--ray-muted) 70%, var(--ray-background)); }
+ray-app-shell::part(header) { background: var(--app-chrome); border-block-end: 1px solid var(--ray-border); }
+ray-statusbar { background: var(--app-chrome); }
+
 ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: column; }
 /* The sidebar and the rest side by side: the divider resizes the sidebar, collapsing it hides it. */
 .layout { flex: 1 1 auto; min-height: 0; height: 100%; }
@@ -30,7 +35,7 @@ ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: col
    left edge; the divider is its border. */
 .sidebar {
   box-sizing: border-box; display: flex; flex-direction: column; height: 100%; overflow: hidden;
-  background: var(--ray-sidebar, color-mix(in srgb, var(--ray-muted) 70%, var(--ray-background)));
+  background: var(--app-chrome);
 }
 .side-head, .side-foot { flex: none; padding: var(--ray-space-2); }
 .side-body { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: var(--ray-space-2); }
@@ -75,7 +80,6 @@ ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: col
 .topbar {
   display: flex; align-items: center; gap: var(--ray-space-xs); height: 100%;
   padding-inline: var(--ray-space-xs); min-width: 0;
-  border-block-end: 1px solid var(--ray-border);
 }
 .top-actions { flex: none; flex-wrap: nowrap; }
 .tabstrip { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; height: 100%; }

@@ -17,14 +17,14 @@
     <div id="tabs" class="tabstrip" role="tablist" data-i18n-attr="aria-label:tabs.label"></div>
     <ray-group gap="xs" class="top-actions">
       <ray-group gap="0" class="env-picker">
-        <ray-select id="environment" size="xs" variant="filled" data-i18n-attr="aria-label:env.label,placeholder:env.label"></ray-select>
+        <ray-select id="environment" size="xs" data-i18n-attr="aria-label:env.label,placeholder:env.label"></ray-select>
         <ray-menu id="env-tools" placement="bottom-end">
           <ray-icon-button slot="trigger" id="manage-envs" size="xs" variant="subtle" label="Environments and cookies" data-i18n-attr="label:env.tools"><ray-icon name="settings"></ray-icon></ray-icon-button>
           <ray-menu-item value="environments"><span data-i18n="env.manage"></span></ray-menu-item>
           <ray-menu-item value="cookies"><span data-i18n="cookies.manage"></span></ray-menu-item>
         </ray-menu>
       </ray-group>
-      <ray-select id="language" size="xs" variant="filled" data-i18n-attr="aria-label:settings.language">
+      <ray-select id="language" size="xs" data-i18n-attr="aria-label:settings.language">
         <option value="en">English</option>
         <option value="es">Español</option>
       </ray-select>
@@ -45,7 +45,7 @@
             <ray-menu-item value="delete" color="red" data-needs-project><span data-i18n="project.delete"></span></ray-menu-item>
           </ray-menu>
         </ray-group>
-        <ray-search id="filter" size="xs" debounce="80" data-i18n-attr="placeholder:tree.filter,aria-label:tree.filter"></ray-search>
+        <ray-search id="filter" size="xs" variant="default" debounce="80" data-i18n-attr="placeholder:tree.filter,aria-label:tree.filter"></ray-search>
       </div>
       <div class="side-body">
         <ray-menu id="tree-menu" native context>
