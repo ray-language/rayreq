@@ -142,7 +142,7 @@ function runMenu(tag) {
       case "import-openapi": return A.askImportOpenApi();
       case "run-folder": return openRunner(A.currentFolder());
       case "copy-curl": return tab && A.copyCurl(tab);
-      case "toggle-sidebar": return $("sidebar").toggle();
+      case "toggle-sidebar": return toggleSidebar();
     }
   });
 }
@@ -168,6 +168,38 @@ function quietContextMenu() {
     const selected = String(window.getSelection() || "") !== "";
     if (!editable && !selected) e.preventDefault();
   });
+}
+
+// ---- the sidebar ----------------------------------------------------------------------------
+// The start pane of a <ray-split>: its divider resizes it (the width is kept by the split's
+// autosave) and collapsing hides it whole. Whether it is hidden is kept here.
+
+const SIDEBAR_HIDDEN = "rayreq.sidebar.hidden";
+
+function toggleSidebar() {
+  const layout = $("layout");
+  // Hidden with the focus inside, the focus would be nowhere to see.
+  const inside = $("sidebar").contains(document.activeElement);
+  layout.toggle();
+  if (layout.collapsed && inside) $("toggle-sidebar").focus();
+}
+
+function restoreSidebar() {
+  const layout = $("layout");
+  try {
+    layout.collapsed = localStorage.getItem(SIDEBAR_HIDDEN) === "1";
+  } catch { /* storage unavailable: shown */ }
+  const sync = () => {
+    $("toggle-sidebar").setAttribute("aria-pressed", String(!layout.collapsed));
+    try {
+      localStorage.setItem(SIDEBAR_HIDDEN, layout.collapsed ? "1" : "0");
+    } catch { /* not kept: fine */ }
+  };
+  // Collapsing with the divider (Enter, double click) or dragging it open again.
+  layout.addEventListener("ray-resize", (e) => {
+    if (e.target === layout) sync();
+  });
+  sync();
 }
 
 async function boot() {
@@ -214,7 +246,8 @@ async function boot() {
   }
 
   $("language").addEventListener("change", (e) => A.guard(() => changeLanguage(e.target.value)));
-  $("toggle-sidebar").addEventListener("click", () => $("sidebar").toggle());
+  $("toggle-sidebar").addEventListener("click", toggleSidebar);
+  restoreSidebar();
 
   window.rayreq = {
     menu: runMenu,

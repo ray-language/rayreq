@@ -11,32 +11,7 @@
 <style>:not(:defined) { visibility: hidden; }</style>
 </head>
 <body>
-<ray-app-shell id="shell" layout="alt" padding="0">
-  <ray-sidebar slot="navbar" id="sidebar" width="17rem" data-i18n-attr="label:sidebar.label">
-    <div slot="header" class="side-head">
-      <ray-group gap="xs" class="project-row">
-        <ray-select id="project" size="xs" class="grow" data-i18n-attr="placeholder:project.choose,aria-label:project.label"></ray-select>
-        <ray-menu id="project-menu" placement="bottom-end">
-          <ray-icon-button slot="trigger" size="xs" variant="subtle" label="Project actions" data-i18n-attr="label:project.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
-          <ray-menu-item value="new"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="project.new"></span></ray-menu-item>
-          <ray-menu-item value="edit" data-needs-project><span data-i18n="project.edit"></span></ray-menu-item>
-          <ray-menu-divider></ray-menu-divider>
-          <ray-menu-item value="delete" color="red" data-needs-project><span data-i18n="project.delete"></span></ray-menu-item>
-        </ray-menu>
-      </ray-group>
-      <ray-search id="filter" size="xs" debounce="80" data-i18n-attr="placeholder:tree.filter,aria-label:tree.filter"></ray-search>
-    </div>
-    <ray-menu id="tree-menu" native context>
-      <div slot="trigger" id="tree" class="tree" role="tree" data-i18n-attr="aria-label:tree.label"></div>
-    </ray-menu>
-    <div slot="footer" class="side-foot">
-      <ray-button id="new-request" size="xs" variant="light" class="grow"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="request.new"></span></ray-button>
-      <ray-tooltip data-i18n-attr="label:folder.new">
-        <ray-icon-button id="new-folder" size="xs" variant="default" label="New folder" data-i18n-attr="label:folder.new"><ray-icon name="folder"></ray-icon></ray-icon-button>
-      </ray-tooltip>
-    </div>
-  </ray-sidebar>
-
+<ray-app-shell id="shell" padding="0">
   <header slot="header" class="topbar">
     <ray-icon-button id="toggle-sidebar" variant="subtle" size="xs" label="Toggle sidebar" data-i18n-attr="label:view.toggleSidebar"><ray-icon name="panel-left"></ray-icon></ray-icon-button>
     <div id="tabs" class="tabstrip" role="tablist" data-i18n-attr="aria-label:tabs.label"></div>
@@ -57,133 +32,161 @@
     </ray-group>
   </header>
 
-  <main id="main">
-    <ray-center id="welcome" class="fill">
-      <ray-empty-state id="empty">
-        <ray-icon slot="icon" name="terminal"></ray-icon>
-        <span id="empty-text"></span>
-        <ray-button slot="actions" id="empty-action" size="sm"></ray-button>
-      </ray-empty-state>
-    </ray-center>
-
-    <section id="workspace" class="workspace" hidden>
-      <form id="urlbar" class="urlbar" autocomplete="off">
-        <ray-select id="method" size="sm" class="method" data-i18n-attr="aria-label:request.method"></ray-select>
-        <ray-input id="url" size="sm" class="grow mono" placeholder="https://api.example.com/users" data-i18n-attr="aria-label:request.url" spellcheck="false" autocapitalize="off"></ray-input>
-        <ray-button id="send" type="submit" size="sm" class="send"><span data-i18n="request.send"></span></ray-button>
-        <ray-button id="save" type="button" size="sm" variant="default"><span data-i18n="request.save"></span></ray-button>
-        <ray-tooltip data-i18n-attr="label:curl.copy">
-          <ray-icon-button id="copy-curl" size="sm" variant="subtle" label="Copy as cURL" data-i18n-attr="label:curl.copy"><ray-icon name="terminal"></ray-icon></ray-icon-button>
+  <ray-split id="layout" class="layout" position="272" min="200" max="480" autosave="rayreq.sidebar" data-i18n-attr="aria-label:sidebar.resize">
+    <aside slot="start" id="sidebar" class="sidebar" data-i18n-attr="aria-label:sidebar.label">
+      <div class="side-head">
+        <ray-group gap="xs" class="project-row">
+          <ray-select id="project" size="xs" class="grow" data-i18n-attr="placeholder:project.choose,aria-label:project.label"></ray-select>
+          <ray-menu id="project-menu" placement="bottom-end">
+            <ray-icon-button slot="trigger" size="xs" variant="subtle" label="Project actions" data-i18n-attr="label:project.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
+            <ray-menu-item value="new"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="project.new"></span></ray-menu-item>
+            <ray-menu-item value="edit" data-needs-project><span data-i18n="project.edit"></span></ray-menu-item>
+            <ray-menu-divider></ray-menu-divider>
+            <ray-menu-item value="delete" color="red" data-needs-project><span data-i18n="project.delete"></span></ray-menu-item>
+          </ray-menu>
+        </ray-group>
+        <ray-search id="filter" size="xs" debounce="80" data-i18n-attr="placeholder:tree.filter,aria-label:tree.filter"></ray-search>
+      </div>
+      <div class="side-body">
+        <ray-menu id="tree-menu" native context>
+          <div slot="trigger" id="tree" class="tree" role="tree" data-i18n-attr="aria-label:tree.label"></div>
+        </ray-menu>
+      </div>
+      <div class="side-foot">
+        <ray-button id="new-request" size="xs" variant="light" class="grow"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="request.new"></span></ray-button>
+        <ray-tooltip data-i18n-attr="label:folder.new">
+          <ray-icon-button id="new-folder" size="xs" variant="default" label="New folder" data-i18n-attr="label:folder.new"><ray-icon name="folder"></ray-icon></ray-icon-button>
         </ray-tooltip>
-      </form>
-      <p id="url-preview" class="url-preview" hidden><span class="label" data-i18n="vars.resolvedUrl"></span> <span id="url-resolved" class="mono"></span></p>
+      </div>
+    </aside>
+    <main slot="end" id="main">
+      <ray-center id="welcome" class="fill">
+        <ray-empty-state id="empty">
+          <ray-icon slot="icon" name="terminal"></ray-icon>
+          <span id="empty-text"></span>
+          <ray-button slot="actions" id="empty-action" size="sm"></ray-button>
+        </ray-empty-state>
+      </ray-center>
 
-      <ray-split id="panes" class="panes" position="50%" min="320" autosave="rayreq.panes" data-i18n-attr="aria-label:panes.resize">
-        <section slot="start" class="pane request-pane" data-i18n-attr="aria-label:request.label">
-          <ray-tabs id="req-tabs" value="params" class="pane-tabs">
-            <ray-tab value="params"><span data-i18n="request.params"></span><ray-badge slot="right" size="xs" color="gray" id="count-params" hidden></ray-badge></ray-tab>
-            <ray-tab value="headers"><span data-i18n="request.headers"></span><ray-badge slot="right" size="xs" color="gray" id="count-headers" hidden></ray-badge></ray-tab>
-            <ray-tab value="auth"><span data-i18n="request.auth"></span><ray-badge slot="right" size="xs" variant="dot" color="green" id="has-auth" hidden></ray-badge></ray-tab>
-            <ray-tab value="body"><span data-i18n="request.body"></span><ray-badge slot="right" size="xs" variant="dot" id="has-body" hidden></ray-badge></ray-tab>
-            <ray-tab value="captures"><span data-i18n="request.captures"></span><ray-badge slot="right" size="xs" color="gray" id="count-captures" hidden></ray-badge></ray-tab>
-            <ray-tab value="assertions"><span data-i18n="request.assertions"></span><ray-badge slot="right" size="xs" color="gray" id="count-assertions" hidden></ray-badge></ray-tab>
-            <ray-tab value="variables"><span data-i18n="request.variables"></span><ray-badge slot="right" size="xs" color="orange" id="count-missing" hidden></ray-badge></ray-tab>
-            <ray-tab value="settings"><span data-i18n="request.settings"></span></ray-tab>
-            <ray-tab-panel value="params"><div id="params" class="kv"></div></ray-tab-panel>
-            <ray-tab-panel value="headers"><div id="headers" class="kv"></div></ray-tab-panel>
-            <ray-tab-panel value="auth"><div id="auth-editor" class="auth-pane"></div></ray-tab-panel>
-            <ray-tab-panel value="body" class="body-panel">
-              <ray-stack gap="sm" class="body-editor">
-                <ray-segmented-control id="body-type" size="xs" class="body-type"></ray-segmented-control>
-                <ray-textarea id="body" class="mono code-area" rows="6" spellcheck="false" autocapitalize="off" data-i18n-attr="aria-label:request.body"></ray-textarea>
-                <div id="form" class="kv" hidden></div>
-                <div id="parts" class="kv" hidden></div>
-                <p id="body-none" class="ray-muted" data-i18n="body.none" hidden></p>
-                <div class="body-foot">
-                  <p id="body-error" class="field-error" role="alert" hidden></p>
-                  <ray-button id="format-body" size="xs" variant="default" hidden><span data-i18n="body.format"></span></ray-button>
-                </div>
-              </ray-stack>
-            </ray-tab-panel>
-            <ray-tab-panel value="captures">
-              <p class="note" data-i18n="captures.help"></p>
-              <div id="captures" class="kv"></div>
-            </ray-tab-panel>
-            <ray-tab-panel value="assertions">
-              <p class="note" data-i18n="assert.help"></p>
-              <div id="assertions" class="kv"></div>
-            </ray-tab-panel>
-            <ray-tab-panel value="variables">
-              <ray-alert id="vars-missing" color="orange" variant="light" hidden></ray-alert>
-              <div id="vars-list"></div>
-              <p class="note" data-i18n="vars.syntax"></p>
-            </ray-tab-panel>
-            <ray-tab-panel value="settings">
-              <ray-stack gap="md" class="settings">
-                <ray-number-input id="timeout" min="0" max="10800" step="5" size="sm" data-i18n-attr="label:settings.timeout,description:settings.timeoutHelp" suffix=" s"></ray-number-input>
-                <ray-switch id="follow" data-i18n-attr="label:settings.follow"></ray-switch>
-                <ray-number-input id="max-redirects" min="0" max="50" size="sm" data-i18n-attr="label:settings.maxRedirects"></ray-number-input>
-                <ray-switch id="use-cookies" data-i18n-attr="label:settings.cookies,description:settings.cookiesHelp"></ray-switch>
-              </ray-stack>
-            </ray-tab-panel>
-          </ray-tabs>
-        </section>
+      <section id="workspace" class="workspace" hidden>
+        <form id="urlbar" class="urlbar" autocomplete="off">
+          <ray-select id="method" size="sm" class="method" data-i18n-attr="aria-label:request.method"></ray-select>
+          <ray-input id="url" size="sm" class="grow mono" placeholder="https://api.example.com/users" data-i18n-attr="aria-label:request.url" spellcheck="false" autocapitalize="off"></ray-input>
+          <ray-button id="send" type="submit" size="sm" class="send"><span data-i18n="request.send"></span></ray-button>
+          <ray-button id="save" type="button" size="sm" variant="default"><span data-i18n="request.save"></span></ray-button>
+          <ray-tooltip data-i18n-attr="label:curl.copy">
+            <ray-icon-button id="copy-curl" size="sm" variant="subtle" label="Copy as cURL" data-i18n-attr="label:curl.copy"><ray-icon name="terminal"></ray-icon></ray-icon-button>
+          </ray-tooltip>
+        </form>
+        <p id="url-preview" class="url-preview" hidden><span class="label" data-i18n="vars.resolvedUrl"></span> <span id="url-resolved" class="mono"></span></p>
 
-        <section slot="end" class="pane response-pane" aria-live="polite" data-i18n-attr="aria-label:response.label">
-          <div id="response-empty" class="fill center">
-            <ray-empty-state compact>
-              <ray-icon slot="icon" name="arrow-up-right"></ray-icon>
-              <span id="response-empty-text"></span>
-            </ray-empty-state>
-          </div>
-          <div id="response-busy" class="fill center" hidden>
-            <ray-stack gap="sm" align="center">
-              <ray-spinner size="md"></ray-spinner>
-              <span class="ray-muted" id="busy-text"></span>
-              <ray-button id="cancel" size="xs" variant="default"><span data-i18n="request.cancel"></span></ray-button>
-            </ray-stack>
-          </div>
-          <div id="response" class="response" hidden>
-            <div class="response-head">
-              <ray-badge id="status" size="md" radius="sm" normal-case></ray-badge>
-              <span id="duration" class="metric"></span>
-              <span id="size" class="metric"></span>
-              <span class="grow"></span>
-              <ray-tooltip data-i18n-attr="label:response.copy">
-                <ray-icon-button id="copy-body" size="sm" variant="subtle" label="Copy body" data-i18n-attr="label:response.copy"><ray-icon name="copy"></ray-icon></ray-icon-button>
-              </ray-tooltip>
-              <ray-tooltip data-i18n-attr="label:response.saveBody">
-                <ray-icon-button id="save-body" size="sm" variant="subtle" label="Save body to a file" data-i18n-attr="label:response.saveBody"><ray-icon name="download"></ray-icon></ray-icon-button>
-              </ray-tooltip>
-            </div>
-            <ray-alert id="response-error" color="red" variant="light" hidden></ray-alert>
-            <ray-alert id="response-unresolved" color="orange" variant="light" hidden></ray-alert>
-            <ray-alert id="response-cookies" color="orange" variant="light" hidden></ray-alert>
-            <ray-tabs id="res-tabs" value="body" class="pane-tabs">
-              <ray-tab value="body"><span data-i18n="response.body"></span></ray-tab>
-              <ray-tab value="headers"><span data-i18n="response.headers"></span><ray-badge slot="right" size="xs" color="gray" id="count-res-headers"></ray-badge></ray-tab>
-              <ray-tab value="request"><span data-i18n="response.request"></span></ray-tab>
-              <ray-tab value="captures" id="res-captures-tab" hidden><span data-i18n="response.captures"></span><ray-badge slot="right" size="xs" color="gray" id="count-res-captures"></ray-badge></ray-tab>
-              <ray-tab value="assertions" id="res-assertions-tab" hidden><span data-i18n="response.assertions"></span><ray-badge slot="right" size="xs" id="count-res-assertions"></ray-badge></ray-tab>
-              <ray-tab value="history"><span data-i18n="response.history"></span></ray-tab>
-            <ray-tab-panel value="body">
-                <ray-group gap="xs" class="body-tools" id="body-tools">
-                  <ray-segmented-control id="body-view" size="xs"></ray-segmented-control>
-                  <ray-switch id="wrap" size="xs" data-i18n-attr="label:response.wrap"></ray-switch>
-                </ray-group>
-                <div id="body-view-area" class="body-area"></div>
+        <ray-split id="panes" class="panes" position="50%" min="320" autosave="rayreq.panes" data-i18n-attr="aria-label:panes.resize">
+          <section slot="start" class="pane request-pane" data-i18n-attr="aria-label:request.label">
+            <ray-tabs id="req-tabs" value="params" class="pane-tabs">
+              <ray-tab value="params"><span data-i18n="request.params"></span><ray-badge slot="right" size="xs" color="gray" id="count-params" hidden></ray-badge></ray-tab>
+              <ray-tab value="headers"><span data-i18n="request.headers"></span><ray-badge slot="right" size="xs" color="gray" id="count-headers" hidden></ray-badge></ray-tab>
+              <ray-tab value="auth"><span data-i18n="request.auth"></span><ray-badge slot="right" size="xs" variant="dot" color="green" id="has-auth" hidden></ray-badge></ray-tab>
+              <ray-tab value="body"><span data-i18n="request.body"></span><ray-badge slot="right" size="xs" variant="dot" id="has-body" hidden></ray-badge></ray-tab>
+              <ray-tab value="captures"><span data-i18n="request.captures"></span><ray-badge slot="right" size="xs" color="gray" id="count-captures" hidden></ray-badge></ray-tab>
+              <ray-tab value="assertions"><span data-i18n="request.assertions"></span><ray-badge slot="right" size="xs" color="gray" id="count-assertions" hidden></ray-badge></ray-tab>
+              <ray-tab value="variables"><span data-i18n="request.variables"></span><ray-badge slot="right" size="xs" color="orange" id="count-missing" hidden></ray-badge></ray-tab>
+              <ray-tab value="settings"><span data-i18n="request.settings"></span></ray-tab>
+              <ray-tab-panel value="params"><div id="params" class="kv"></div></ray-tab-panel>
+              <ray-tab-panel value="headers"><div id="headers" class="kv"></div></ray-tab-panel>
+              <ray-tab-panel value="auth"><div id="auth-editor" class="auth-pane"></div></ray-tab-panel>
+              <ray-tab-panel value="body" class="body-panel">
+                <ray-stack gap="sm" class="body-editor">
+                  <ray-segmented-control id="body-type" size="xs" class="body-type"></ray-segmented-control>
+                  <ray-textarea id="body" class="mono code-area" rows="6" spellcheck="false" autocapitalize="off" data-i18n-attr="aria-label:request.body"></ray-textarea>
+                  <div id="form" class="kv" hidden></div>
+                  <div id="parts" class="kv" hidden></div>
+                  <p id="body-none" class="ray-muted" data-i18n="body.none" hidden></p>
+                  <div class="body-foot">
+                    <p id="body-error" class="field-error" role="alert" hidden></p>
+                    <ray-button id="format-body" size="xs" variant="default" hidden><span data-i18n="body.format"></span></ray-button>
+                  </div>
+                </ray-stack>
               </ray-tab-panel>
-              <ray-tab-panel value="headers"><div id="res-headers"></div></ray-tab-panel>
-              <ray-tab-panel value="request"><div id="raw-request"></div></ray-tab-panel>
-              <ray-tab-panel value="captures"><div id="res-captures"></div></ray-tab-panel>
-              <ray-tab-panel value="assertions"><div id="res-assertions"></div></ray-tab-panel>
-              <ray-tab-panel value="history"><div id="history"></div></ray-tab-panel>
+              <ray-tab-panel value="captures">
+                <p class="note" data-i18n="captures.help"></p>
+                <div id="captures" class="kv"></div>
+              </ray-tab-panel>
+              <ray-tab-panel value="assertions">
+                <p class="note" data-i18n="assert.help"></p>
+                <div id="assertions" class="kv"></div>
+              </ray-tab-panel>
+              <ray-tab-panel value="variables">
+                <ray-alert id="vars-missing" color="orange" variant="light" hidden></ray-alert>
+                <div id="vars-list"></div>
+                <p class="note" data-i18n="vars.syntax"></p>
+              </ray-tab-panel>
+              <ray-tab-panel value="settings">
+                <ray-stack gap="md" class="settings">
+                  <ray-number-input id="timeout" min="0" max="10800" step="5" size="sm" data-i18n-attr="label:settings.timeout,description:settings.timeoutHelp" suffix=" s"></ray-number-input>
+                  <ray-switch id="follow" data-i18n-attr="label:settings.follow"></ray-switch>
+                  <ray-number-input id="max-redirects" min="0" max="50" size="sm" data-i18n-attr="label:settings.maxRedirects"></ray-number-input>
+                  <ray-switch id="use-cookies" data-i18n-attr="label:settings.cookies,description:settings.cookiesHelp"></ray-switch>
+                </ray-stack>
+              </ray-tab-panel>
             </ray-tabs>
-          </div>
-        </section>
-      </ray-split>
-    </section>
-  </main>
+          </section>
+
+          <section slot="end" class="pane response-pane" aria-live="polite" data-i18n-attr="aria-label:response.label">
+            <div id="response-empty" class="fill center">
+              <ray-empty-state compact>
+                <ray-icon slot="icon" name="arrow-up-right"></ray-icon>
+                <span id="response-empty-text"></span>
+              </ray-empty-state>
+            </div>
+            <div id="response-busy" class="fill center" hidden>
+              <ray-stack gap="sm" align="center">
+                <ray-spinner size="md"></ray-spinner>
+                <span class="ray-muted" id="busy-text"></span>
+                <ray-button id="cancel" size="xs" variant="default"><span data-i18n="request.cancel"></span></ray-button>
+              </ray-stack>
+            </div>
+            <div id="response" class="response" hidden>
+              <div class="response-head">
+                <ray-badge id="status" size="md" radius="sm" normal-case></ray-badge>
+                <span id="duration" class="metric"></span>
+                <span id="size" class="metric"></span>
+                <span class="grow"></span>
+                <ray-tooltip data-i18n-attr="label:response.copy">
+                  <ray-icon-button id="copy-body" size="sm" variant="subtle" label="Copy body" data-i18n-attr="label:response.copy"><ray-icon name="copy"></ray-icon></ray-icon-button>
+                </ray-tooltip>
+                <ray-tooltip data-i18n-attr="label:response.saveBody">
+                  <ray-icon-button id="save-body" size="sm" variant="subtle" label="Save body to a file" data-i18n-attr="label:response.saveBody"><ray-icon name="download"></ray-icon></ray-icon-button>
+                </ray-tooltip>
+              </div>
+              <ray-alert id="response-error" color="red" variant="light" hidden></ray-alert>
+              <ray-alert id="response-unresolved" color="orange" variant="light" hidden></ray-alert>
+              <ray-alert id="response-cookies" color="orange" variant="light" hidden></ray-alert>
+              <ray-tabs id="res-tabs" value="body" class="pane-tabs">
+                <ray-tab value="body"><span data-i18n="response.body"></span></ray-tab>
+                <ray-tab value="headers"><span data-i18n="response.headers"></span><ray-badge slot="right" size="xs" color="gray" id="count-res-headers"></ray-badge></ray-tab>
+                <ray-tab value="request"><span data-i18n="response.request"></span></ray-tab>
+                <ray-tab value="captures" id="res-captures-tab" hidden><span data-i18n="response.captures"></span><ray-badge slot="right" size="xs" color="gray" id="count-res-captures"></ray-badge></ray-tab>
+                <ray-tab value="assertions" id="res-assertions-tab" hidden><span data-i18n="response.assertions"></span><ray-badge slot="right" size="xs" id="count-res-assertions"></ray-badge></ray-tab>
+                <ray-tab value="history"><span data-i18n="response.history"></span></ray-tab>
+              <ray-tab-panel value="body">
+                  <ray-group gap="xs" class="body-tools" id="body-tools">
+                    <ray-segmented-control id="body-view" size="xs"></ray-segmented-control>
+                    <ray-switch id="wrap" size="xs" data-i18n-attr="label:response.wrap"></ray-switch>
+                  </ray-group>
+                  <div id="body-view-area" class="body-area"></div>
+                </ray-tab-panel>
+                <ray-tab-panel value="headers"><div id="res-headers"></div></ray-tab-panel>
+                <ray-tab-panel value="request"><div id="raw-request"></div></ray-tab-panel>
+                <ray-tab-panel value="captures"><div id="res-captures"></div></ray-tab-panel>
+                <ray-tab-panel value="assertions"><div id="res-assertions"></div></ray-tab-panel>
+                <ray-tab-panel value="history"><div id="history"></div></ray-tab-panel>
+              </ray-tabs>
+            </div>
+          </section>
+        </ray-split>
+      </section>
+    </main>
+  </ray-split>
 
   <ray-statusbar slot="footer">
     <ray-statusbar-item id="status-project"><ray-icon slot="icon" name="folder"></ray-icon><span></span></ray-statusbar-item>

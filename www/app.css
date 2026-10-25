@@ -20,16 +20,23 @@ pre.raw, ray-code, table.kv-table td:not(:first-child), #url-resolved, .response
 [hidden] { display: none !important; }
 
 ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: column; }
+/* The sidebar and the rest side by side: the divider resizes the sidebar, collapsing it hides it. */
+.layout { flex: 1 1 auto; min-height: 0; height: 100%; }
 #main { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 
 /* ---- sidebar -------------------------------------------------------------------------- */
 
-/* ray-sidebar pads its header, content and footer (space-2): ours add nothing, so the fields and
-   the rows of the tree share one left edge. */
+/* Head, tree and foot padded alike (space-2), so the fields and the rows of the tree share one
+   left edge; the divider is its border. */
+.sidebar {
+  box-sizing: border-box; display: flex; flex-direction: column; height: 100%; overflow: hidden;
+  background: var(--ray-sidebar, color-mix(in srgb, var(--ray-muted) 70%, var(--ray-background)));
+}
+.side-head, .side-foot { flex: none; padding: var(--ray-space-2); }
+.side-body { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: var(--ray-space-2); }
 .side-head { display: grid; gap: var(--ray-space-2); }
 .project-row { flex-wrap: nowrap; }
 .side-foot { display: flex; gap: var(--ray-space-2); align-items: center; }
-ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: none; }
 #tree-menu, #tree-menu > [slot="trigger"] { display: block; min-height: 100%; }
 
 .tree { min-height: 12rem; font-size: var(--ray-font-size-sm); outline: none; }

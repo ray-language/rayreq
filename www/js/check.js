@@ -161,6 +161,20 @@ export async function run(port, sampleFile) {
     expect(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"][aria-expanded="true"]`), "folder row expanded");
     expect(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`).getAttribute("aria-level") === "2", "request nested under it");
 
+    // The sidebar is a pane: wide enough for the tree, hidden whole (not a rail) and back, and
+    // whether it is hidden is remembered.
+    const sidebarWidth = () => $("sidebar").getBoundingClientRect().width;
+    expect(sidebarWidth() >= 200 && sidebarWidth() <= 480, `sidebar width ${sidebarWidth()}`);
+    window.rayreq.menu("toggle-sidebar");
+    await tick();
+    expect($("layout").collapsed && sidebarWidth() === 0 && getComputedStyle($("tree")).visibility === "hidden",
+      `sidebar hidden: ${sidebarWidth()}`);
+    expect(localStorage.getItem("rayreq.sidebar.hidden") === "1" && $("toggle-sidebar").getAttribute("aria-pressed") === "false",
+      "hiding the sidebar is remembered");
+    window.rayreq.menu("toggle-sidebar");
+    await tick();
+    expect(!$("layout").collapsed && sidebarWidth() >= 200 && localStorage.getItem("rayreq.sidebar.hidden") === "0", "sidebar shown again");
+
     // A right click reads the items of the row clicked, not those of the previous one.
     const menu = $("tree-menu");
     const read = [];
