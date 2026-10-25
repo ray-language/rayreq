@@ -11,7 +11,7 @@ import { formatTime, t } from "./i18n.js";
 import { AuthEditor } from "./auth.js";
 import { KvEditor } from "./kv.js";
 import { activeTab, emit, folderOf, on, state } from "./state.js";
-import { $, debounce, el } from "./util.js";
+import { $, PLACEHOLDER, debounce, el } from "./util.js";
 import { sourceText } from "./varfield.js";
 
 // ---- the request's resolved variables -------------------------------------------------------
@@ -37,7 +37,7 @@ export const refreshVariablesSoon = debounce(refreshVariables, 250);
 
 function usedNames(d) {
   const text = [d.url, ...d.headers.flatMap((h) => [h.key, h.value]), d.body, ...d.form.flatMap((f) => [f.key, f.value])].join("\n");
-  return new Set([...text.matchAll(/\{\{([A-Za-z0-9_.-]+)\}\}/g)].map((m) => m[1]));
+  return new Set([...text.matchAll(PLACEHOLDER)].map((m) => m[1]));
 }
 
 export function renderVariables(tab = activeTab()) {

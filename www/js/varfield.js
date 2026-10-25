@@ -10,11 +10,8 @@
 // value.
 
 import { t } from "./i18n.js";
-import { el } from "./util.js";
+import { PLACEHOLDER, el } from "./util.js";
 
-/// `{{name}}` exactly as vars.expand finds it: a name holds no `}`, so the first `}}` after a
-/// valid name closes it, and `{{{x}}}` is `{` + `{{x}}` + `}`.
-const PLACEHOLDER = /\{\{([A-Za-z0-9_.-]+)\}\}/g;
 const NAME_CHAR = /[A-Za-z0-9_.-]/;
 
 /// Where a variable's value comes from, in words.

@@ -8,7 +8,7 @@ import { AssertionsEditor } from "./assertions.js";
 import { AUTH_NAMES, AuthEditor } from "./auth.js";
 import { KvEditor, PartsEditor } from "./kv.js";
 import { activeTab, emit, on, state } from "./state.js";
-import { $, debounce, paramsFromUrl, reindentJson, urlFromParams } from "./util.js";
+import { $, debounce, paramsFromUrl, parseJsonTemplate, reindentJson, urlFromParams } from "./util.js";
 import { refreshVariables, refreshVariablesSoon, renderVariables } from "./variables.js";
 import { refreshFields, varField } from "./varfield.js";
 
@@ -74,7 +74,7 @@ const validateBody = debounce(() => {
     return;
   }
   try {
-    JSON.parse(d.body);
+    parseJsonTemplate(d.body);
     err.hidden = true;
   } catch (e) {
     err.textContent = t("body.invalidJson", { error: e.message });

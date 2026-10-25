@@ -63,12 +63,25 @@ export function urlFromParams(url, params) {
   return base + (on.length ? "?" + query : "") + fragment;
 }
 
+// ---- {{variables}} ---------------------------------------------------------------------------
+
+/// `{{name}}` exactly as vars.expand finds it: a name holds no `}`, so the first `}}` after a
+/// valid name closes it, and `{{{x}}}` is `{` + `{{x}}` + `}`.
+export const PLACEHOLDER = /\{\{([A-Za-z0-9_.-]+)\}\}/g;
+const PLACEHOLDER_AT = /\{\{[A-Za-z0-9_.-]+\}\}/y;
+
 // ---- JSON ----------------------------------------------------------------------------------
 
+/// Parses a JSON body that may hold `{{variables}}`: each one stands for a value (a number,
+/// an object…) or, inside a string, for some of its text, so it is checked as a `0`.
+export function parseJsonTemplate(text) {
+  return JSON.parse(text.replace(PLACEHOLDER, "0"));
+}
+
 /// Re-indents JSON text without parsing numbers (JSON.parse would round 64-bit ids) and keeps
-/// the key order; throws a SyntaxError when it is not JSON.
+/// the key order; a `{{variable}}` stays as written. Throws a SyntaxError when it is not JSON.
 export function reindentJson(text, indent = 2) {
-  JSON.parse(text); // validation only
+  parseJsonTemplate(text); // validation only
   const pad = (n) => "\n" + " ".repeat(n * indent);
   let out = "";
   let depth = 0;
@@ -82,6 +95,11 @@ export function reindentJson(text, indent = 2) {
       continue;
     }
     if (c === '"') { inString = true; out += c; continue; }
+    if (c === "{") {
+      PLACEHOLDER_AT.lastIndex = i;
+      const m = PLACEHOLDER_AT.exec(text);
+      if (m) { out += m[0]; i += m[0].length - 1; continue; }
+    }
     if (c === " " || c === "\n" || c === "\r" || c === "\t") continue;
     if (c === "{" || c === "[") {
       // An empty {} or [] stays on one line.

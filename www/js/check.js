@@ -88,6 +88,20 @@ export async function run(port, sampleFile) {
     type($("body"), '{"n": 12345678901234567890}');
     expect(tab.draft.body_type === "json" && tab.draft.method === "POST", "method and body type");
 
+    // A {{variable}} stands for a value, or for text inside a string: still JSON, and formatting
+    // keeps it whole. Broken JSON is still called so.
+    const settle = () => new Promise((r) => setTimeout(r, 400));
+    type($("body"), '{"id":{{id}},"tags":[{{tags}}],"name":"{{first}} {{last}}","n":{"a":1}}');
+    await settle();
+    expect($("body-error").hidden, `a body with variables is JSON: ${$("body-error").textContent}`);
+    $("format-body").click();
+    expect(tab.draft.body === '{\n  "id": {{id}},\n  "tags": [\n    {{tags}}\n  ],\n  "name": "{{first}} {{last}}",\n  "n": {\n    "a": 1\n  }\n}',
+      `formatted: ${tab.draft.body}`);
+    type($("body"), '{"id": {{id}');
+    await settle();
+    expect(!$("body-error").hidden, "a broken body is still called broken");
+    type($("body"), '{"n": 12345678901234567890}');
+
     await A.save(tab);
     expect(!isDirty(tab), "saved: not dirty");
     const stored = await call("requests.get", { id: tab.id });
