@@ -1,5 +1,6 @@
-// A key/value table (params, headers, form fields): a checkbox, the key, the value and a
-// remove button per row, and always one blank row at the end to type a new one. Typing never
+// A key/value table (params, headers, form fields): the key, the value, a checkbox and a
+// remove button per row (the row's own controls on the right, so the fields start at the
+// pane's edge), and always one blank row at the end to type a new one. Typing never
 // re-renders the rows (the focus stays put); set() does, for changes made from outside.
 
 import { getHost, hostCan } from "@raylang/elements";
@@ -95,7 +96,7 @@ export class KvEditor {
       remove.style.visibility = "hidden";
       box.style.visibility = "hidden";
     }
-    line.append(box, key, value, remove);
+    line.append(key, value, box, remove);
     if (this.variables) for (const input of [key, value]) varField(input, this.variables);
     return line;
   }
@@ -125,7 +126,7 @@ export class PartsEditor extends KvEditor {
   rowElement(row, isBlank = false) {
     const line = super.rowElement(row, isBlank);
     line.classList.add("parts");
-    const [box, key, value, remove] = line.children;
+    const [key, value, box, remove] = line.children;
     const kind = el("ray-select", { size: "xs", "aria-label": t("parts.kind") });
     kind.data = [{ value: "text", label: t("parts.text") }, { value: "file", label: t("parts.file") }];
     kind.value = row.file ? "file" : "text";
@@ -161,7 +162,7 @@ export class PartsEditor extends KvEditor {
     });
     const cell = el("div", { class: "part-value" }, value, pick);
     showKind();
-    line.replaceChildren(box, key, kind, cell, ctype, remove);
+    line.replaceChildren(key, kind, cell, ctype, box, remove);
     return line;
   }
 }

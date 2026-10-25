@@ -423,12 +423,12 @@ export async function run(port, sampleFile) {
     await tick();
     inView($("req-tabs"), "request tabs");
     const assertRow = (i) => $("assertions").querySelectorAll(".kv-row")[i].children;
-    let [, src, path, op, expected] = assertRow(0);
+    let [src, path, op, expected] = assertRow(0);
     type(src, "json", "change");
     type(path, "big");
     type(expected, "12345678901234567890");
     expect($("assertions").querySelectorAll(".kv-row").length === 2, "a new blank assertion row");
-    [, src, path, op, expected] = assertRow(1);
+    [src, path, op, expected] = assertRow(1);
     type(src, "header", "change");
     type(path, "X-Echo");
     type(op, "ne", "change");

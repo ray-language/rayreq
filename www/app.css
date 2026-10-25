@@ -103,10 +103,9 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 .pane-tabs::part(panels) { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--ray-space-sm); }
 .request-pane { border-inline-end: 1px solid var(--ray-border); }
 
-.kv-row { display: grid; grid-template-columns: auto 1fr 1.4fr auto; gap: var(--ray-space-2); align-items: center; margin-block-end: var(--ray-space-1); }
+.kv-row { display: grid; grid-template-columns: 1fr 1.4fr auto auto; gap: var(--ray-space-2); align-items: center; margin-block-end: var(--ray-space-1); }
 .kv-row ray-input::part(input) { font-family: var(--ray-font-mono); font-size: var(--ray-font-size-xs); }
 .kv-row.off ray-input { opacity: 0.55; }
-.kv-row .spacer { width: 28px; }
 .kv { container-type: inline-size; }
 .kv-row > ray-input, .kv-row > ray-select, .kv-row > .part-value { min-width: 0; }
 /* ray-icon-button has no intrinsic width in WebKit (its inner button is flex: 1): an auto
@@ -117,37 +116,37 @@ ray-theme-toggle::part(button) { border-color: transparent; }
    table is wide, else on two (what is checked or sent, then how), each row set off by a rule. */
 .kv-row.asserts, .kv-row.parts { row-gap: var(--ray-space-1); }
 .kv-row.asserts {
-  grid-template-columns: auto 8.5rem minmax(0, 1fr) auto;
-  grid-template-areas: "box source path remove" ". op expected .";
+  grid-template-columns: 8.5rem minmax(0, 1fr) auto auto;
+  grid-template-areas: "source path box remove" "op expected . .";
 }
-.kv-row.asserts > :nth-child(1), .kv-row.parts > :nth-child(1) { grid-area: box; }
-.kv-row.asserts > :nth-child(2) { grid-area: source; }
-.kv-row.asserts > :nth-child(3) { grid-area: path; }
-.kv-row.asserts > :nth-child(4) { grid-area: op; }
-.kv-row.asserts > :nth-child(5) { grid-area: expected; }
+.kv-row.asserts > :nth-child(1) { grid-area: source; }
+.kv-row.asserts > :nth-child(2) { grid-area: path; }
+.kv-row.asserts > :nth-child(3) { grid-area: op; }
+.kv-row.asserts > :nth-child(4) { grid-area: expected; }
+.kv-row.asserts > :nth-child(5), .kv-row.parts > :nth-child(5) { grid-area: box; }
 .kv-row.asserts > :nth-child(6), .kv-row.parts > :nth-child(6) { grid-area: remove; }
 .kv-row.parts {
-  grid-template-columns: auto minmax(0, 1fr) 10rem auto;
-  grid-template-areas: "box key kind remove" ". value ctype .";
+  grid-template-columns: minmax(0, 1fr) 10rem auto auto;
+  grid-template-areas: "key kind box remove" "value ctype . .";
 }
-.kv-row.parts > :nth-child(2) { grid-area: key; }
-.kv-row.parts > :nth-child(3) { grid-area: kind; }
-.kv-row.parts > :nth-child(4) { grid-area: value; }
-.kv-row.parts > :nth-child(5) { grid-area: ctype; }
+.kv-row.parts > :nth-child(1) { grid-area: key; }
+.kv-row.parts > :nth-child(2) { grid-area: kind; }
+.kv-row.parts > :nth-child(3) { grid-area: value; }
+.kv-row.parts > :nth-child(4) { grid-area: ctype; }
 .kv-row.asserts + .kv-row.asserts, .kv-row.parts + .kv-row.parts {
   border-block-start: 1px solid var(--ray-border); padding-block-start: var(--ray-space-2); margin-block-start: var(--ray-space-1);
 }
 @container (min-width: 44rem) {
   .kv-row.asserts {
-    grid-template-columns: auto 7.5rem minmax(0, 1fr) 8.5rem minmax(0, 1fr) auto;
-    grid-template-areas: "box source path op expected remove";
+    grid-template-columns: 7.5rem minmax(0, 1fr) 8.5rem minmax(0, 1fr) auto auto;
+    grid-template-areas: "source path op expected box remove";
   }
   .kv-row.asserts + .kv-row.asserts { border-block-start: 0; padding-block-start: 0; }
 }
 @container (min-width: 46rem) {
   .kv-row.parts {
-    grid-template-columns: auto minmax(0, 1fr) 6.5rem minmax(0, 1.4fr) minmax(0, 0.8fr) auto;
-    grid-template-areas: "box key kind value ctype remove";
+    grid-template-columns: minmax(0, 1fr) 6.5rem minmax(0, 1.4fr) minmax(0, 0.8fr) auto auto;
+    grid-template-areas: "key kind value ctype box remove";
   }
   .kv-row.parts + .kv-row.parts { border-block-start: 0; padding-block-start: 0; }
 }

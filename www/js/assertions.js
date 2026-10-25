@@ -118,7 +118,7 @@ export class AssertionsEditor {
       });
     }
     shape();
-    line.append(box, source, path, op, expected, remove);
+    line.append(source, path, op, expected, box, remove);
     return line;
   }
 }
