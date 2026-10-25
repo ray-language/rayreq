@@ -24,6 +24,9 @@ ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: col
 ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: none; }
 #tree-menu, #tree-menu > [slot="trigger"] { display: block; min-height: 100%; }
 
+/* Not text to select: a right click would otherwise select the word under it (WebKit only
+   honors the prefixed property). */
+.tree, .tabstrip { -webkit-user-select: none; user-select: none; }
 .tree { min-height: 12rem; font-size: var(--ray-font-size-sm); outline: none; }
 /* A folder's chevron + icon and a request's method tag take the same width, so names at one
    depth start at one x. */
@@ -31,7 +34,7 @@ ray-sidebar[collapsed] .side-head, ray-sidebar[collapsed] .side-foot { display: 
 .tree-row {
   display: flex; align-items: center; gap: var(--tree-gap);
   padding-block: 3px; padding-inline: calc(var(--depth, 0) * 14px + 6px) 6px;
-  border-radius: var(--ray-radius-sm); cursor: default; user-select: none;
+  border-radius: var(--ray-radius-sm); cursor: default;
   color: var(--ray-foreground); white-space: nowrap;
 }
 .tree-row:hover { background: var(--ray-muted); }
@@ -177,7 +180,7 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 pre.raw {
   margin: 0; padding: var(--ray-space-sm); border: 1px solid var(--ray-border); border-radius: var(--ray-radius-md);
   background: var(--ray-code-background); font-family: var(--ray-font-mono);
-  font-size: var(--ray-font-size-xs); overflow: auto; white-space: pre; user-select: text;
+  font-size: var(--ray-font-size-xs); overflow: auto; white-space: pre; -webkit-user-select: text; user-select: text;
 }
 pre.raw.wrap { white-space: pre-wrap; word-break: break-word; }
 .preview-image { max-width: 100%; border: 1px solid var(--ray-border); border-radius: var(--ray-radius-md); background: repeating-conic-gradient(var(--ray-muted) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
@@ -187,7 +190,7 @@ table.kv-table { width: 100%; border-collapse: collapse; font-size: var(--ray-fo
 table.kv-table td { padding: 4px 6px; border-block-end: 1px solid var(--ray-border); vertical-align: top; }
 table.kv-table th { padding: 4px 6px; text-align: start; font-weight: var(--ray-font-weight-medium); color: var(--ray-muted-foreground); border-block-end: 1px solid var(--ray-border); }
 table.kv-table td:first-child { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); white-space: nowrap; width: 1%; }
-table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: break-all; user-select: text; }
+table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: break-all; -webkit-user-select: text; user-select: text; }
 
 .history-row {
   display: grid; grid-template-columns: auto auto 1fr auto auto; gap: var(--ray-space-sm); align-items: center;

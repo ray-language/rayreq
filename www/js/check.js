@@ -174,6 +174,9 @@ export async function run(port, sampleFile) {
     delete menu.popupNative;
     expect(read.length === 2 && read[0].includes("duplicate") && !read[0].includes("new-request"), `request menu: ${read[0]}`);
     expect(read[1].includes("new-request") && !read[1].includes("duplicate"), `folder menu: ${read[1]}`);
+    // Nor does a right click select the row's text (WebKit reads only the prefixed property).
+    const rowStyle = getComputedStyle(document.querySelector("#tree .tree-row .name"));
+    expect((rowStyle.webkitUserSelect || rowStyle.userSelect) === "none", `tree text selectable: ${rowStyle.webkitUserSelect}`);
 
     // Cancelling the dialog creates nothing.
     const cancelled = A.newFolder();
