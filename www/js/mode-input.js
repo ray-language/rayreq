@@ -1,4 +1,4 @@
-// <rr-mode-input>: a text field with a menu of modes on one side, like <ray-password-input>'s
+// <rr-mode-input>: a text field with a menu of modes at its start, like <ray-password-input>'s
 // toggle but with any number of choices. Choosing a mode applies its attributes to the field
 // (type, placeholder, inputmode, pattern… whatever a ray-input takes), so one control says both
 // what a value is and the value: "a file at this path", "text", "a number"…
@@ -19,7 +19,7 @@
 //   by default the icon when the option has one, else its label.
 // - menu-label: the trigger's accessible name ("Mode"); it is read with the current label.
 // - native-menu: the system's menu where the host offers one (std/ui).
-// - position: "end" (default) or "start", the side the trigger sits on.
+// - position: "start" (default) or "end", the side the trigger sits on.
 //
 // Fires `ray-mode-change` ({ mode, previous, option }) when the user chooses; it is cancelable,
 // and canceling it keeps the previous mode. Alt+ArrowDown in the field opens the menu.
@@ -51,7 +51,8 @@ const styles = css`
   .mode-trigger [data-ray-icon] svg { width: 1.1em; height: 1.1em; }
   .mode-trigger .chevron svg { width: 0.85em; height: 0.85em; }
   .mode-trigger .text:empty, .mode-trigger .icon:empty { display: none; }
-  :host([position="start"]) .mode-menu-box { order: -1; }
+  /* At the start unless asked otherwise (a default is not reflected as an attribute). */
+  :host(:not([position="end"])) .mode-menu-box { order: -1; }
   .mode-item-check { visibility: hidden; }
   ray-menu-item[data-current] .mode-item-check { visibility: visible; }
   .mode-item-description { display: block; font-size: 0.85em; color: var(--ray-muted-foreground); }
@@ -82,13 +83,13 @@ export class RrModeInput extends RayInput {
     display: { type: String, reflect: true },
     menuLabel: { type: String, attribute: "menu-label", default: "Mode" },
     nativeMenu: { type: Boolean, attribute: "native-menu", reflect: true },
-    position: { type: String, reflect: true, default: "end" },
+    position: { type: String, reflect: true, default: "start" },
     options: { attribute: false },
   };
   static styles = [...RayInput.styles, styles];
   static template = fieldTemplate(
     `<input id="control" class="control" part="input">` +
-      `<span class="mode-menu-box"><ray-menu class="mode-menu" placement="bottom-end" part="menu">` +
+      `<span class="mode-menu-box"><ray-menu class="mode-menu" placement="bottom-start" part="menu">` +
       `<button type="button" slot="trigger" class="mode-trigger focus-ring" part="trigger" aria-haspopup="menu">` +
       `<span class="icon" part="trigger-icon"></span><span class="text" part="trigger-label"></span>` +
       `<span class="chevron" data-ray-icon="chevron-down" aria-hidden="true"></span>` +
@@ -169,7 +170,7 @@ export class RrModeInput extends RayInput {
     const menu = this.$(".mode-menu");
     const trigger = this.$(".mode-trigger");
     menu.native = Boolean(this.nativeMenu);
-    menu.placement = this.position === "start" ? "bottom-start" : "bottom-end";
+    menu.placement = this.position === "end" ? "bottom-end" : "bottom-start";
     const display = this.display || (option?.icon ? "icon" : "label");
     const text = option ? option.hint || option.label : "";
     trigger.querySelector(".text").textContent = display === "icon" ? "" : text;
