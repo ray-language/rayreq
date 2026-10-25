@@ -29,8 +29,10 @@ export class AuthEditor {
   /// oauthContext(): what the program needs to find the token ({request} or {project_id,
   /// folder_id, auth}); null when there is none (nothing saved yet). variables: the scope whose
   /// `{{variables}}` the fields show (varfield.js); secrets are masked, so they do not.
-  constructor(container, { forFolder = false, onChange = () => {}, oauthContext = () => null, variables = null } = {}) {
+  /// size: of the fields ("xs" in the request's pane, like its other tables; "sm" in a dialog).
+  constructor(container, { forFolder = false, onChange = () => {}, oauthContext = () => null, variables = null, size = "sm" } = {}) {
     this.container = container;
+    this.size = size;
     this.forFolder = forFolder;
     this.variables = variables;
     this.onChange = onChange;
@@ -44,7 +46,7 @@ export class AuthEditor {
 
   input(field, labelKey, { secret = false, mono = true, placeholderKey = "" } = {}) {
     const tag = secret ? "ray-password-input" : "ray-input";
-    const x = el(tag, { size: "sm", spellcheck: "false", autocapitalize: "off", class: mono ? "mono" : "" });
+    const x = el(tag, { size: this.size, spellcheck: "false", autocapitalize: "off", class: mono ? "mono" : "" });
     x.dataset.labelKey = labelKey;
     if (placeholderKey) x.dataset.placeholderKey = placeholderKey;
     x.addEventListener("input", () => {
@@ -66,7 +68,7 @@ export class AuthEditor {
 
   build() {
     this.inputs = [];
-    this.kind = el("ray-select", { size: "sm" });
+    this.kind = el("ray-select", { size: this.size });
     this.kind.addEventListener("change", () => {
       this.auth.kind = this.kind.value;
       this.show();
@@ -77,18 +79,18 @@ export class AuthEditor {
       this.auth.add_to = this.addTo.value;
       this.changed();
     });
-    this.grant = el("ray-select", { size: "sm" });
+    this.grant = el("ray-select", { size: this.size });
     this.grant.addEventListener("change", () => {
       this.auth.grant = this.grant.value;
       this.show();
       this.changed();
     });
-    this.clientAuth = el("ray-select", { size: "sm" });
+    this.clientAuth = el("ray-select", { size: this.size });
     this.clientAuth.addEventListener("change", () => {
       this.auth.client_auth = this.clientAuth.value;
       this.changed();
     });
-    this.pkce = el("ray-switch", { size: "sm" });
+    this.pkce = el("ray-switch", { size: this.size });
     this.pkce.addEventListener("change", () => {
       this.auth.pkce = this.pkce.checked;
       this.changed();

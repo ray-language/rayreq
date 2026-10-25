@@ -182,6 +182,7 @@ export function initEditor() {
     // The token is found through the request (its own auth, or the folder's it inherits).
     oauthContext: () => (draft() ? { request: draft() } : null),
     variables: scope,
+    size: "xs",
     onChange: (a) => {
       const d = draft();
       if (!d || loading) return;

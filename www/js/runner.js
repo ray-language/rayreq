@@ -31,6 +31,7 @@ export async function openRunner(folderId = 0) {
   $("runner-note").textContent = t("runner.note", { env: env ? env.name : "—" });
   $("runner-summary").textContent = "";
   $("runner-progress").value = 0;
+  $("runner-progress").color = "";
   renderSteps();
   setRunning(false);
   dialog.show();
@@ -44,7 +45,7 @@ function renderSteps() {
     box.append(el("ray-empty-state", { compact: true }, t("runner.empty")));
     return;
   }
-  const all = el("ray-checkbox", { size: "sm", "aria-label": t("runner.all") });
+  const all = el("ray-checkbox", { size: "xs", "aria-label": t("runner.all") });
   all.checked = true;
   all.addEventListener("change", () => {
     for (const r of current.rows) r.box.checked = all.checked;
@@ -54,7 +55,7 @@ function renderSteps() {
     el("th", {}, all),
     ...["runner.request", "runner.status", "runner.time", "runner.result"].map((k) => el("th", { text: t(k) }))));
   for (const step of steps) {
-    const box = el("ray-checkbox", { size: "sm", "aria-label": step.name });
+    const box = el("ray-checkbox", { size: "xs", "aria-label": step.name });
     box.checked = true;
     const name = el("button", { class: "runner-name", type: "button", title: t("runner.open") },
       el("span", { class: `method-tag m-${step.method}`, text: step.method === "DELETE" ? "DEL" : step.method === "OPTIONS" ? "OPT" : step.method }),
@@ -123,6 +124,7 @@ export async function run() {
   c.running = true;
   c.stopped = false;
   setRunning(true);
+  $("runner-progress").color = "";
   for (const r of c.rows) {
     r.status.textContent = "";
     r.time.textContent = "";
@@ -185,6 +187,8 @@ export async function run() {
   ];
   $("runner-summary").replaceChildren(...parts.flatMap((x, i) => (i ? [" · ", x] : [x])));
   $("runner-summary").dataset.result = counts.failed || counts.errors ? "failed" : "passed";
+  // The bar ends in the run's verdict, not in the plain blue of "running".
+  $("runner-progress").color = counts.failed || counts.errors ? "red" : "green";
   c.running = false;
   c.last = counts;
   setRunning(false);

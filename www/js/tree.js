@@ -299,7 +299,8 @@ export function renderProjects() {
   const select = $("project");
   select.data = state.projects.map((p) => ({ value: String(p.id), label: p.name }));
   select.value = state.project ? String(state.project.id) : "";
-  for (const item of $("project-menu").querySelectorAll("[data-needs-project]")) {
+  // What acts on a project (menu items, the sidebar's buttons and filter) waits for one.
+  for (const item of document.querySelectorAll("[data-needs-project]")) {
     item.disabled = !state.project;
   }
   const status = $("status-project").querySelector("span");

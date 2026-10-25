@@ -54,7 +54,7 @@ export class KvEditor {
 
   rowElement(row, isBlank = false) {
     const line = el("div", { class: "kv-row" + (row.enabled ? "" : " off") });
-    const box = el("ray-checkbox", { "aria-label": t("kv.enabled") });
+    const box = el("ray-checkbox", { size: "xs", "aria-label": t("kv.enabled") });
     box.checked = row.enabled;
     const key = el("ray-input", { size: "xs", placeholder: t(this.keyLabel), "aria-label": t(this.keyLabel), spellcheck: "false", autocapitalize: "off" });
     key.value = row.key;

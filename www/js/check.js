@@ -61,7 +61,12 @@ export async function run(port, sampleFile) {
     await A.loadProjects();
     await A.selectProject(p.id);
     expect(state.project && state.project.id === p.id, "project selected");
+    // Opening the first tab does not change the header's height (nor move what is below it).
+    const headerHeight = () => $("shell").shadowRoot.querySelector('[part="header"]').getBoundingClientRect().height;
+    const emptyHeader = headerHeight();
     await A.newRequest();
+    await tick();
+    expect(Math.abs(headerHeight() - emptyHeader) < 0.5, `header ${emptyHeader} px without tabs, ${headerHeight()} px with one`);
     await tick();
     const tab = activeTab();
     expect(tab, "a tab opened for the new request");
@@ -138,9 +143,18 @@ export async function run(port, sampleFile) {
     await A.send(tab);
     expect(tab.response && !tab.response.ok && tab.response.error, "connection refused reported");
     expect(!$("response-error").hidden, "error alert shown");
+    // With nothing back there is no body or headers to show: the request it tried is shown,
+    // and the next answer opens on the body again.
+    expect($("res-body-tab").hidden && $("res-headers-tab").hidden && $("res-tabs").value === "request" && tab.resTab === "body",
+      `tabs after a failure: ${$("res-tabs").value} / ${tab.resTab}`);
+    expect($("raw-request").textContent.includes(" http://127.0.0.1:1/"), `the request tried: ${$("raw-request").textContent.slice(0, 40)}`);
+
+    type($("url"), `${base}/echo`);
+    await A.send(tab);
+    expect(!$("res-body-tab").hidden && $("res-tabs").value === "body", "an answer shows its body again");
 
     const history = await call("history.list", { request_id: tab.id });
-    expect(history.length === 3, `history has the three answered sends: ${history.length}`);
+    expect(history.length === 4, `history has the four answered sends: ${history.length}`);
 
     // Rename from the store keeps the open tab in sync.
     await call("requests.rename", { id: tab.id, name: "Renamed" });
@@ -477,6 +491,11 @@ export async function run(port, sampleFile) {
     $("req-tabs").value = "assertions";
     await tick();
     inView($("req-tabs"), "request tabs");
+    // Every tab of the request pane fits at the default layout: a 1280 px window, the sidebar at
+    // 240 px and the request at 53 % of the rest, less the list's inset (the sizes a user drags
+    // are their own).
+    const tabsWidth = [...$("req-tabs").querySelectorAll(":scope > ray-tab")].reduce((sum, x) => sum + x.getBoundingClientRect().width, 0);
+    expect(tabsWidth <= 0.53 * (1280 - 240 - 12) - 12, `the request tabs need ${Math.round(tabsWidth)} px`);
     const assertRow = (i) => $("assertions").querySelectorAll(".kv-row")[i].children;
     let [src, path, op, expected] = assertRow(0);
     type(src, "json", "change");
@@ -522,6 +541,7 @@ export async function run(port, sampleFile) {
       `run: ${JSON.stringify(counts)} ${results}`);
     expect(!$("runner-list").textContent.includes("null"), `a result without detail: ${$("runner-list").textContent}`);
     expect($("runner-summary").dataset.result === "failed" && runRows()[2].textContent.includes("404"), "the summary and the 404");
+    expect($("runner-progress").color === "red", `the bar ends in the verdict: ${$("runner-progress").color}`);
     // Unchecked steps are skipped; stopping at the first failure leaves the rest unsent.
     runRows()[1].querySelector("ray-checkbox").checked = false;
     $("runner-stop-on-failure").checked = true;

@@ -53,15 +53,17 @@ export function renderVariables(tab = activeTab()) {
   preview.hidden = !resolved;
   $("url-resolved").textContent = resolved;
 
+  // An app-wide choice, shown beside the names it is about.
+  $("block-unresolved").checked = state.settings.block_unresolved === "1";
   const alert = $("vars-missing");
   alert.hidden = missing.length === 0 && !(v && v.error);
   if (v && v.error) {
     alert.label = "";
     alert.textContent = v.error;
   } else if (missing.length) {
-    // Titled like the response's alert for the same names, in the future tense: not sent yet.
+    // One line, worded like the response's alert for the same names, in the future tense.
     const key = state.settings.block_unresolved === "1" ? "vars.missingBlocked" : "vars.missing";
-    alert.label = t("response.unresolved");
+    alert.label = "";
     alert.textContent = t(key, { names: missing.join(", ") });
   }
 
@@ -220,7 +222,6 @@ export async function openEnvironments() {
   envDrafts = new Map();
   closeEnvName();
   fillEnvSelect();
-  $("block-unresolved").checked = state.settings.block_unresolved === "1";
   const active = state.environments.find((e) => e.active) || state.environments[0];
   if (active) await showEnvironment(active.id);
   $("env-dialog").show();

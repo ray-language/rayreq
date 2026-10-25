@@ -63,7 +63,7 @@ export class AssertionsEditor {
 
   rowElement(row) {
     const line = el("div", { class: "kv-row asserts" + (row.enabled ? "" : " off") });
-    const box = el("ray-checkbox", { "aria-label": t("kv.enabled") });
+    const box = el("ray-checkbox", { size: "xs", "aria-label": t("kv.enabled") });
     box.checked = row.enabled;
     const source = el("ray-select", { size: "xs", "aria-label": t("assert.source") });
     source.data = SOURCES.map((s) => ({ value: s, label: t(`assert.src.${s}`) }));

@@ -149,13 +149,17 @@ function renderCaptures(r) {
   if (r.environment) box.append(el("p", { class: "note", text: `${t("env.label")}: ${r.environment}` }));
   for (const c of list) {
     const row = el("div", { class: "capture-row" },
-      el("ray-badge", { size: "xs", radius: "sm", color: CAPTURE_COLORS[c.status] || "gray", "normal-case": true }, t(`capture.${c.status}`)),
+      el("ray-badge", { size: "xs", radius: "sm", color: CAPTURE_COLORS[c.status] || "gray", "normal-case": true }, capitalize(t(`capture.${c.status}`))),
       el("span", { class: "what", text: `${c.variable} ← ${c.path}` }));
     const detail = c.status === "applied" ? c.value : c.detail;
     if (detail) row.append(el("span", { class: "value", text: detail }));
     box.append(row);
   }
 }
+
+/// A status word as a badge's label: capitalized like the tests' and the runner's ("Pasa",
+/// "Correcta"); the same words stay lowercase inside the runner's sentences.
+const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /// The assertions of the send (a response read from the history has none).
 function renderAssertions(r) {
@@ -164,7 +168,7 @@ function renderAssertions(r) {
   const { passed, failed } = tally(list);
   const badge = $("count-res-assertions");
   badge.textContent = `${passed}/${list.length}`;
-  badge.color = failed ? "red" : "green";
+  badge.dataset.color = failed ? "red" : "green";
   badge.dataset.result = failed ? "failed" : "passed";
   renderResults($("res-assertions"), list);
 }
@@ -245,7 +249,7 @@ export function renderResponse() {
   const warn = $("response-unresolved");
   warn.hidden = unresolved.length === 0;
   if (unresolved.length) {
-    warn.label = t("response.unresolved");
+    warn.label = "";
     warn.textContent = t("response.unresolvedText", { names: unresolved.join(", ") });
   }
   const ignored = r.cookies_ignored || [];
@@ -265,8 +269,11 @@ export function renderResponse() {
   $("copy-body").disabled = !r.ok || !r.text;
   $("save-body").disabled = !r.ok || !r.history_id || r.kind === "empty";
   $("count-res-headers").textContent = String((r.headers || []).length);
-  $("count-res-headers").hidden = !r.ok;
-  $("res-tabs").value = tab.resTab;
+  // Nothing came back: no body or headers tabs, and the request it tried is what is shown
+  // (the tab the user chose stays theirs for the next answer).
+  $("res-body-tab").hidden = !r.ok;
+  $("res-headers-tab").hidden = !r.ok;
+  $("res-tabs").value = !r.ok && (tab.resTab === "body" || tab.resTab === "headers") ? "request" : tab.resTab;
   renderBody(tab);
   $("res-headers").replaceChildren(headerTable(r.headers || []));
   renderRequest(r);

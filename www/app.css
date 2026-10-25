@@ -92,11 +92,26 @@ ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: col
 }
 [data-more-start] { --fade-start: 2.5rem; }
 [data-more-end] { --fade-end: 2.5rem; }
-.pane-tabs > ray-tab { padding-inline: var(--ray-space-3); }
+/* Compact enough that every tab of a pane fits at the default window size (1280 px, sidebar
+   open): the label at xs, a tight padding, the count close to it. */
+/* A tab's count: a small number beside its label (a pill per tab would not fit), colored
+   only when it says something (missing variables, failed tests). */
+.pane-tabs > ray-tab.icon-tab { font-size: var(--ray-font-size-sm); }
+.tab-count { font-size: 0.6875rem; font-variant-numeric: tabular-nums; color: var(--ray-muted-foreground); }
+.tab-count[data-color="orange"] { color: var(--ray-orange-light-color); font-weight: var(--ray-font-weight-medium); }
+.tab-count[data-color="red"] { color: var(--ray-red-light-color); font-weight: var(--ray-font-weight-medium); }
+.tab-count[data-color="green"] { color: var(--ray-green-light-color); }
+/* The list is inset by what the panel pads its content less what a tab pads its label, so the
+   first label starts where the panel's content does. */
+.pane-tabs::part(list) { padding-inline: calc(var(--ray-space-sm) - 0.375rem); }
+.pane-tabs > ray-tab {
+  padding-inline: 0.375rem; gap: var(--ray-space-1);
+  min-height: var(--ray-control-height-xs); font-size: var(--ray-font-size-xs);
+}
 /* Tabs are no taller than the header's other controls, so opening the first one does not
    change the header's height. */
 .tab {
-  display: flex; align-items: center; gap: var(--ray-space-2); max-width: 14rem; flex: none;
+  box-sizing: border-box; display: flex; align-items: center; gap: var(--ray-space-2); max-width: 14rem; flex: none;
   height: var(--ray-control-height-xs); padding-inline: var(--ray-space-3) var(--ray-space-1);
   border-radius: var(--ray-radius-sm); border: 1px solid transparent;
   font-size: var(--ray-font-size-xs); color: var(--ray-muted-foreground); cursor: default; background: none;
@@ -126,7 +141,6 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 .pane { height: 100%; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .pane-tabs { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .pane-tabs::part(panels) { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--ray-space-sm); }
-.request-pane { border-inline-end: 1px solid var(--ray-border); }
 
 .kv-row { display: grid; grid-template-columns: 1fr 1.4fr auto auto; gap: var(--ray-space-2); align-items: center; margin-block-end: var(--ray-space-1); }
 .kv-row ray-input::part(input) { font-family: var(--ray-font-mono); font-size: var(--ray-font-size-xs); }
@@ -134,8 +148,9 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 .kv { container-type: inline-size; }
 .kv-row > ray-input, .kv-row > ray-select, .kv-row > .part-value { min-width: 0; }
 /* ray-icon-button has no intrinsic width in WebKit (its inner button is flex: 1): an auto
-   track would shrink it to nothing. size="xs" is this square. */
-.kv-row > ray-icon-button { width: var(--ray-control-height-xs); }
+   track would shrink it to nothing. Narrower than its xs square, so the row's checkbox and ×
+   read as one pair of controls. */
+.kv-row > ray-icon-button { width: 1.5rem; }
 
 /* Assertions and multipart parts have more cells than a half pane holds: on one line when the
    table is wide, else on two (what is checked or sent, then how), each row set off by a rule. */
@@ -188,7 +203,8 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 .body-foot #format-body { margin-inline-start: auto; }
 .body-foot:not(:has(> :not([hidden]))) { display: none; }
 .field-error { color: var(--ray-destructive); font-size: var(--ray-font-size-xs); margin: 0; }
-.settings { max-width: 28rem; }
+/* The request's forms (auth, settings) as wide as one reads comfortably, not the whole pane. */
+.settings, .auth-pane { max-width: 28rem; }
 
 /* ---- response -------------------------------------------------------------------------- */
 
@@ -197,6 +213,7 @@ ray-theme-toggle::part(button) { border-color: transparent; }
 .metric { font-size: var(--ray-font-size-xs); color: var(--ray-muted-foreground); font-variant-numeric: tabular-nums; }
 /* The response's alerts: inset from the pane's edges, all alike. */
 .response > ray-alert { margin: var(--ray-space-2) var(--ray-space-3) 0; }
+.response > ray-alert .mono { font-size: var(--ray-font-size-xs); }
 .response > ray-alert:not([hidden]) ~ ray-tabs { margin-block-start: var(--ray-space-2); }
 .body-tools { margin-block-end: var(--ray-space-xs); }
 pre.raw {
@@ -239,7 +256,9 @@ table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: br
 }
 .url-preview .label { font-weight: var(--ray-font-weight-medium); }
 .var-missing { color: var(--ray-orange-light-color); }
-.vars-table td.src { color: var(--ray-muted-foreground); white-space: nowrap; }
+/* A variable's name is what one looks for (in the text color); where it comes from is prose. */
+table.vars-table td:first-child { color: var(--ray-foreground); }
+table.vars-table td.src { font-family: inherit; word-break: normal; color: var(--ray-muted-foreground); white-space: nowrap; }
 .vars-table td.val { font-family: var(--ray-font-mono); word-break: break-all; }
 .env-head { flex-wrap: nowrap; align-items: end; }
 .inline-name { display: flex; gap: var(--ray-space-xs); align-items: center; }
@@ -255,7 +274,7 @@ table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: br
 
 /* ---- auth ---------------------------------------------------------------------------------- */
 
-.auth-pane { max-width: 32rem; }
+
 .token-box { border: 1px solid var(--ray-border); border-radius: var(--ray-radius-md); padding: var(--ray-space-sm) var(--ray-space-md); display: grid; gap: var(--ray-space-xs); }
 .token-head { font-size: var(--ray-font-size-sm); font-weight: var(--ray-font-weight-medium); }
 .token-status { margin: 0; }
@@ -264,6 +283,7 @@ table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: br
 
 /* ---- cookies ------------------------------------------------------------------------------- */
 
+.block-unresolved { margin-block-start: var(--ray-space-3); }
 #vars-list { margin-block-end: var(--ray-space-3); }
 #cookies-list { max-height: 60vh; overflow: auto; }
 .cookies-table td.val { font-family: var(--ray-font-mono); word-break: break-all; }
@@ -283,9 +303,9 @@ table.runner-table td:last-child { font-family: inherit; word-break: normal; }
 .runner-name:focus-visible { outline: 2px solid var(--ray-ring); outline-offset: 2px; border-radius: 4px; }
 .runner-name .meta { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
 .runner-detail { margin-inline-start: 6px; color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
-.runner-delay-label { font-size: var(--ray-font-size-sm); }
+.runner-delay-label { font-size: var(--ray-font-size-xs); }
 .runner-delay { width: 7rem; }
-.runner-summary { margin: 0; font-weight: var(--ray-font-weight-medium); min-height: 1.4em; }
+.runner-summary { margin: 0; font-size: var(--ray-font-size-sm); font-weight: var(--ray-font-weight-medium); min-height: 1.4em; }
 .runner-summary .count-green { color: var(--ray-green-light-color); }
 .runner-summary .count-red { color: var(--ray-red-light-color); }
 .runner-summary .meta { color: var(--ray-muted-foreground); font-weight: normal; }
