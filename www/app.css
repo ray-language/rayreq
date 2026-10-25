@@ -106,7 +106,13 @@ ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: col
 .tab[aria-selected="true"] { background: var(--ray-card); border-color: var(--ray-border); color: var(--ray-foreground); }
 .tab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab .dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--ray-primary); flex: none; }
-.tab .close { flex: none; }
+/* The × is a pointer target only (the tab closes with Delete): a small square of its own. */
+.tab .close {
+  flex: none; display: inline-grid; place-items: center;
+  width: 1.25rem; height: 1.25rem; border-radius: var(--ray-radius-sm);
+  color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs);
+}
+.tab .close:hover { background: var(--ray-muted); color: var(--ray-foreground); }
 ray-theme-toggle::part(button) { border-color: transparent; }
 .tab:not(:hover):not([aria-selected="true"]) .close { visibility: hidden; }
 

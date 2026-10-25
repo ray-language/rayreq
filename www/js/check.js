@@ -398,8 +398,30 @@ export async function run(port, sampleFile) {
     expect(back.request.method === "DELETE" && back.request.url === `${base}/echo?gone=1`, `round trip: ${exported.command}`);
     await A.copyCurl(tab2);
     await A.save(tab2);
-    await A.closeTab(tab2.id);
-    A.activate(tab.id);
+
+    // The open requests are WAI-ARIA tabs over one panel: no control inside a tab, Home/End
+    // move, Delete closes the focused one and the focus goes to the tab left active.
+    const tabNode = (id) => document.querySelector(`#tabs [data-id="${id}"]`);
+    expect(tabNode(tab2.id).id === `tab-${tab2.id}` && tabNode(tab2.id).getAttribute("aria-controls") === "workspace"
+      && $("workspace").getAttribute("role") === "tabpanel" && $("workspace").getAttribute("aria-labelledby") === `tab-${tab2.id}`,
+      "tabs and their panel are linked");
+    expect(!$("tabs").querySelector(".tab button, .tab [tabindex]:not(.tab), .tab ray-icon-button"), "a tab holds no focusable control");
+    const press = (k) => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    // A modal closing a moment ago (the cURL import) leaves the page inert until it is gone.
+    await until(() => {
+      tabNode(tab2.id).focus();
+      return document.activeElement === tabNode(tab2.id);
+    }, "the tab takes the focus");
+    press("Home");
+    await frames();
+    expect(state.active === tab.id && document.activeElement === tabNode(tab.id), "Home goes to the first tab");
+    press("End");
+    await frames();
+    expect(state.active === tab2.id && document.activeElement === tabNode(tab2.id), "End goes to the last tab");
+    press("Delete");
+    await until(() => !state.tabs.includes(tab2), "Delete closed the tab");
+    await frames();
+    expect(state.active === tab.id && document.activeElement === tabNode(tab.id), `the focus follows: ${document.activeElement && document.activeElement.id}`);
 
     // OpenAPI: a description pasted into the import dialog becomes a folder per tag of requests
     // that send to its server, with the API key of its security scheme from the environment.
