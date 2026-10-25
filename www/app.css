@@ -79,7 +79,7 @@ ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: col
 
 .topbar {
   display: flex; align-items: center; gap: var(--ray-space-xs); height: 100%;
-  padding-inline: var(--ray-space-xs); min-width: 0;
+  box-sizing: border-box; padding: var(--ray-space-1) var(--ray-space-xs); min-width: 0;
 }
 .top-actions { flex: none; flex-wrap: nowrap; }
 .tabstrip { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; height: 100%; }
