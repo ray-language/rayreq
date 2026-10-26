@@ -59,9 +59,6 @@ fn edit_items() -> [ui.MenuItem] {
     ]
 }
 
-/// The titles the bar was declared with: `replace_menu` finds a menu by its title and cannot
-/// rename it, so a language change relabels the items under the titles of the launch (the
-/// titles themselves follow the language from the next launch).
 pub struct Titles {
     file: string,
     request: string,
@@ -78,18 +75,37 @@ pub fn titles(lang: string) -> Titles {
 
 /// Declares the bar (before the first window: on Linux a menu only reaches windows opened
 /// after it).
-pub fn install(n: bridge.Native, lang: string) -> Result<Titles, string> {
+pub fn install(n: bridge.Native, lang: string) -> Result<int, string> {
     let t = titles(lang);
     bridge.menu(n, t.file, file_menu(lang))?;
     ui.edit_menu(edit_items())?;
     bridge.menu(n, t.request, request_menu(lang))?;
-    bridge.menu(n, t.view, view_menu(lang))?;
-    Result.Ok(t)
+    bridge.menu(n, t.view, view_menu(lang))
 }
 
-/// The same items in another language.
-pub fn relabel(n: bridge.Native, t: Titles, lang: string) -> Result<int, string> {
-    bridge.replace_menu(n, t.file, file_menu(lang))?;
-    bridge.replace_menu(n, t.request, request_menu(lang))?;
-    bridge.replace_menu(n, t.view, view_menu(lang))
+/// `ui.rename_menu`, and the bridge's record of the bar (what the command palette lists) under
+/// the new title: the bridge has no rename of its own.
+fn rename(n: bridge.Native, old: string, new: string) -> Result<int, string> {
+    if (old == new) {
+        return Result.Ok(0);
+    }
+    let r = ui.rename_menu(old, new)?;
+    for i in 0..n.menus.len() {
+        if (n.menus[i].title == old) {
+            n.menus[i] = bridge.Menu { title: new, items: n.menus[i].items };
+        }
+    }
+    Result.Ok(r)
+}
+
+/// The bar, declared in `from`, switched to `to`: titles and items.
+pub fn relabel(n: bridge.Native, from: string, to: string) -> Result<int, string> {
+    let a = titles(from);
+    let b = titles(to);
+    rename(n, a.file, b.file)?;
+    rename(n, a.request, b.request)?;
+    rename(n, a.view, b.view)?;
+    bridge.replace_menu(n, b.file, file_menu(to))?;
+    bridge.replace_menu(n, b.request, request_menu(to))?;
+    bridge.replace_menu(n, b.view, view_menu(to))
 }

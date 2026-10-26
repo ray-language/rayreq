@@ -75,7 +75,7 @@ fn json_text(raw: string) -> string {
         };
     }
     if (raw.starts_with("{") || raw.starts_with("[")) {
-        return jpath.compact(raw);
+        return json.compact(raw);
     }
     raw
 }

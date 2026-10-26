@@ -2,7 +2,7 @@
 name = "rayreq"
 version = "0.1.0"
 license = "Apache-2.0"
-raylang = "1.27.79"
+raylang = "1.27.82"
 
 # The page (www/) is plain HTML + ES modules on ray-elements, served by the process over ray://app.
 [native]
@@ -17,5 +17,6 @@ icon = "brand/icon.png"
 
 [dependencies]
 elements = "^0.8.0"
-net = "^0.11.4"
-db = "^0.5.1"
+net = "^0.12.0"
+db = "^0.6.0"
+yaml = "^0.1.1"

@@ -110,8 +110,9 @@ Not yet: OAuth 2's device and implicit grants; test results are not kept in the 
 ```
 src/main.ray       the window and the one loop that owns it and the database
 src/api.ray        the page ↔ program protocol (window.ray.request → {ok, value})
-src/exec.ray       prepare a request and run the exchange (redirects, timeout, HEAD)
-src/urls.ray       URL parsing, percent-encoding without double encoding, Location resolution
+src/exec.ray       prepare a request and run the exchange (redirects, timeout)
+src/urls.ray       what the user typed as a URL (std/url splits it), percent-encoding without
+                   double encoding, Location resolution
 src/vars.ray       {{variables}}: the precedence chain (folders → environment) and substitution
 src/auth.ray       which auth applies (own or inherited) and the header/parameter it adds
 src/multipart.ray  multipart/form-data bodies: parts, files, boundary, names quoted
@@ -120,11 +121,10 @@ src/cookies.ray    the cookie jar's rules (RFC 6265): Set-Cookie in, Cookie head
 src/curl.ray       curl commands: bash word splitting, options → request, send → command
 src/runner.ray     the runner's plan: a folder's requests in the tree's order
 src/openapi.ray    OpenAPI 3.x / Swagger 2.0 → folders, requests, variables and auth
-src/yaml.ray       YAML (the subset API descriptions use) into an ordered tree
-src/node.ray       that ordered tree, JSON in and out (keys in order, numbers as written)
+src/node.ray       reading the ordered tree of an import (json.Doc; YAML through the yaml package)
 src/captures.ray   captures: response values into the environment, each with its status
 src/assertions.ray tests on the response: what each source reads, how each comparison judges
-src/jpath.ray      a value at a JSON path, read from the text (numbers as written)
+src/jpath.ray      a value at a JSON path (numbers as written)
 src/view.ray       an outcome as the page shows it and as the history stores it
 src/store.ray      SQLite: schema migrations, projects, environments, folders, requests,
                    variables, history, settings
@@ -147,14 +147,14 @@ The database lives in `~/Library/Application Support/RayReq/rayreq.db` (macOS),
 
 ## Known limits
 
-- TLS certificate verification cannot be turned off (net/http has no option for it).
-- Repeated request headers with the same name are joined into one (`, `, or `; ` for
-  `Cookie`): net/http takes headers as a map.
+- TLS certificate verification cannot be turned off yet (net/http can since 0.12; rayreq has
+  no setting for it).
+- `Host`, `Content-Length`, `Connection` and `Transfer-Encoding` cannot be set by hand: net/http
+  writes its own and would send both.
+- Repeated `Cookie` headers are joined into one with `; ` (RFC 6265 allows a single one).
 - Response bodies are read whole; the page shows up to 2 MB of text and the history keeps up to
   5 MB per execution.
 - The header names of a response are shown in lower case (as net/http gives them).
-- A HEAD response keeps only one of several `Set-Cookie` headers (net/http's streaming client,
-  which HEAD needs, gives the headers as a map).
 - There is no public-suffix list: a cookie for a one-label domain (`com`) is refused, but one
   for `co.uk` from `a.co.uk` is accepted.
 - OAuth 2 redirect URIs must be loopback addresses (RFC 8252): a server that only accepts an
@@ -162,5 +162,5 @@ The database lives in `~/Library/Application Support/RayReq/rayreq.db` (macOS),
 - Passwords, tokens (OAuth 2 ones too), cookies and variable values are stored as plain text in the local database, and the
   history keeps the headers as sent (Authorization included), like the request view shows them.
 
-What raylang, net, db and ray-elements made hard is recorded in
-`../findings/open/rayreq-1.27.79.md`.
+What raylang, net, db and ray-elements made hard is recorded in `../findings/` (the
+`rayreq-*.md` campaigns).

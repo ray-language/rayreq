@@ -130,8 +130,11 @@ fn start() -> int {
     let l = net.tcp_listen("127.0.0.1", 0).unwrap();
     let port = net.local_port(l);
     let _t = spawn(fn() {
-        let _ = webserver.serve_options_on(l, webserver.options()
-            .quiet(), fn() -> fn(webserver.Request) -> webserver.Response { site });
+        let _ = webserver.serve_options_on(
+            l,
+            webserver.options().quiet(),
+            fn() -> fn(webserver.Request) -> webserver.Response { site }
+        );
     });
     port
 }

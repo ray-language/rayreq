@@ -3,11 +3,11 @@
 //!
 //! One connection, owned by the program's main loop (never shared with other fibers). Schema
 //! changes go through `migrations()` (tracked by `PRAGMA user_version`): append, never edit a
-//! shipped entry. `sqlite.exec` runs ONE statement per call (a second one is silently ignored),
-//! so each migration is a list of statements.
+//! shipped entry. Each migration is a list of statements, one `exec` each, so a failure names
+//! the migration it broke.
 //!
-//! db/sqlite returns every column as text and NULL as "": the queries wrap nullable columns in
-//! COALESCE so a NULL folder reads as 0.
+//! Ids are 0 in the model for "none" (a root folder, a request outside any folder) and NULL in
+//! the database: `id_param` binds them, and the queries read them back with COALESCE.
 
 import std/time;
 import db/sqlite;
@@ -171,13 +171,22 @@ fn int_of(s: string) -> int {
     parse_int(s).unwrap_or(0)
 }
 
-/// NULL for a 0 id: a root folder or a request outside any folder.
-fn id_or_null(id: int) -> string {
-    if (id == 0) { "NULL" } else { to_string(id) }
+/// A 0 id bound as NULL: a root folder or a request outside any folder.
+fn id_param(id: int) -> Option<string> {
+    if (id == 0) { Option.None } else { Option.Some(to_string(id)) }
+}
+
+fn all_some(params: [string]) -> [Option<string>] {
+    params.map(fn(p: string) -> Option<string> { Option.Some(p) })
 }
 
 pub fn exec(s: Store, sql: string, params: [string]) -> Result<int, string> {
     sqlite.exec(s.conn, sql, params)
+}
+
+/// `exec` with parameters that may be NULL (`Option.None`).
+fn exec_opt(s: Store, sql: string, params: [Option<string>]) -> Result<int, string> {
+    sqlite.exec_opt(s.conn, sql, params)
 }
 
 pub fn query(s: Store, sql: string, params: [string]) -> Result<[[string]], string> {
@@ -443,10 +452,10 @@ pub fn create_folder(
     check_parent(s, project_id, parent_id)?;
     let pos = next_position(s, "folders", "parent_id", project_id, parent_id)?;
     let now = to_string(time.now());
-    exec(
+    exec_opt(
         s,
-        "INSERT INTO folders (project_id, parent_id, name, position, created_at, updated_at) VALUES (?, ${id_or_null(parent_id)}, ?, ?, ?, ?)",
-        [to_string(project_id), n, to_string(pos), now, now]
+        "INSERT INTO folders (project_id, parent_id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [Option.Some(to_string(project_id)), id_param(parent_id)] + all_some([n, to_string(pos), now, now])
     )?;
     get_folder(s, last_id(s)?)
 }
@@ -492,10 +501,10 @@ pub fn move_folder(s: Store, id: int, parent_id: int) -> Result<model.Folder, st
         return Result.Ok(f);
     }
     let pos = next_position(s, "folders", "parent_id", f.project_id, parent_id)?;
-    exec(
+    exec_opt(
         s,
-        "UPDATE folders SET parent_id = ${id_or_null(parent_id)}, position = ?, updated_at = ? WHERE id = ?",
-        [to_string(pos), to_string(time.now()), to_string(id)]
+        "UPDATE folders SET parent_id = ?, position = ?, updated_at = ? WHERE id = ?",
+        [id_param(parent_id)] + all_some([to_string(pos), to_string(time.now()), to_string(id)])
     )?;
     get_folder(s, id)
 }
@@ -582,31 +591,32 @@ fn insert_request(s: Store, r: model.Request) -> Result<model.Request, string> {
     check_parent(s, r.project_id, r.folder_id)?;
     let pos = next_position(s, "requests", "folder_id", r.project_id, r.folder_id)?;
     let now = to_string(time.now());
-    exec(
+    exec_opt(
         s,
-        "INSERT INTO requests (project_id, folder_id, name, method, url, params, headers, body_type, body, form, captures, auth, use_cookies, timeout_ms, follow_redirects, max_redirects, position, created_at, updated_at, parts, assertions) VALUES (?, ${id_or_null(r.folder_id)}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [
-            to_string(r.project_id),
-            n,
-            r.method,
-            r.url,
-            model.pairs_text(r.params),
-            model.pairs_text(r.headers),
-            r.body_type,
-            r.body,
-            model.pairs_text(r.form),
-            model.pairs_text(r.captures),
-            model.auth_text(r.auth),
-            if (r.use_cookies) { "1" } else { "0" },
-            to_string(r.timeout_ms),
-            if (r.follow_redirects) { "1" } else { "0" },
-            to_string(r.max_redirects),
-            to_string(pos),
-            now,
-            now,
-            model.parts_text(r.parts),
-            model.assertions_text(r.assertions)
-        ]
+        "INSERT INTO requests (project_id, folder_id, name, method, url, params, headers, body_type, body, form, captures, auth, use_cookies, timeout_ms, follow_redirects, max_redirects, position, created_at, updated_at, parts, assertions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [Option.Some(to_string(r.project_id)), id_param(r.folder_id)] + all_some(
+            [
+                n,
+                r.method,
+                r.url,
+                model.pairs_text(r.params),
+                model.pairs_text(r.headers),
+                r.body_type,
+                r.body,
+                model.pairs_text(r.form),
+                model.pairs_text(r.captures),
+                model.auth_text(r.auth),
+                if (r.use_cookies) { "1" } else { "0" },
+                to_string(r.timeout_ms),
+                if (r.follow_redirects) { "1" } else { "0" },
+                to_string(r.max_redirects),
+                to_string(pos),
+                now,
+                now,
+                model.parts_text(r.parts),
+                model.assertions_text(r.assertions)
+            ]
+        )
     )?;
     get_request(s, last_id(s)?)
 }
@@ -669,10 +679,10 @@ pub fn move_request(s: Store, id: int, folder_id: int) -> Result<model.Request, 
         return Result.Ok(r);
     }
     let pos = next_position(s, "requests", "folder_id", r.project_id, folder_id)?;
-    exec(
+    exec_opt(
         s,
-        "UPDATE requests SET folder_id = ${id_or_null(folder_id)}, position = ?, updated_at = ? WHERE id = ?",
-        [to_string(pos), to_string(time.now()), to_string(id)]
+        "UPDATE requests SET folder_id = ?, position = ?, updated_at = ? WHERE id = ?",
+        [id_param(folder_id)] + all_some([to_string(pos), to_string(time.now()), to_string(id)])
     )?;
     get_request(s, id)
 }
@@ -956,7 +966,7 @@ fn variables_of(rows: [[string]]) -> [model.Pair] {
 fn insert_variables(
     s: Store,
     sql: string,
-    lead: [string],
+    lead: [Option<string>],
     vars: [model.Pair]
 ) -> Result<int, string> {
     var pos = 0;
@@ -964,11 +974,11 @@ fn insert_variables(
         pos = pos + 1;
         // A copy: arrays are shared on assignment.
         var params = [] + lead;
-        params.push(v.key);
-        params.push(v.value);
-        params.push(if (v.enabled) { "1" } else { "0" });
-        params.push(to_string(pos));
-        exec(s, sql, params)?;
+        params.push(Option.Some(v.key));
+        params.push(Option.Some(v.value));
+        params.push(Option.Some(if (v.enabled) { "1" } else { "0" }));
+        params.push(Option.Some(to_string(pos)));
+        exec_opt(s, sql, params)?;
     }
     Result.Ok(pos)
 }
@@ -999,7 +1009,7 @@ pub fn save_environment_variables(
         insert_variables(
             s,
             "INSERT INTO environment_variables (environment_id, key, value, enabled, position) VALUES (?, ?, ?, ?, ?)",
-            [to_string(environment_id)],
+            [Option.Some(to_string(environment_id))],
             clean
         )
     })?;
@@ -1079,8 +1089,8 @@ pub fn save_folder_variables(
         }
         insert_variables(
             s,
-            "INSERT INTO folder_variables (folder_id, environment_id, key, value, enabled, position) VALUES (?, ${id_or_null(environment_id)}, ?, ?, ?, ?)",
-            [to_string(folder_id)],
+            "INSERT INTO folder_variables (folder_id, environment_id, key, value, enabled, position) VALUES (?, ?, ?, ?, ?, ?)",
+            [Option.Some(to_string(folder_id)), id_param(environment_id)],
             clean
         )
     })?;
@@ -1228,20 +1238,21 @@ pub fn save_token(
             "DELETE FROM oauth_tokens WHERE environment_id = ? AND owner = ?",
             [to_string(environment_id), owner]
         )?;
-        exec(
+        exec_opt(
             s,
-            "INSERT INTO oauth_tokens (environment_id, folder_id, request_id, owner, access_token, token_type, refresh_token, expires_at, scope, obtained_at, config) VALUES (?, ${id_or_null(folder_id)}, ${id_or_null(request_id)}, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                to_string(environment_id),
-                owner,
-                t.access_token,
-                t.token_type,
-                t.refresh_token,
-                to_string(t.expires_at),
-                t.scope,
-                to_string(t.obtained_at),
-                t.config
-            ]
+            "INSERT INTO oauth_tokens (environment_id, folder_id, request_id, owner, access_token, token_type, refresh_token, expires_at, scope, obtained_at, config) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [Option.Some(to_string(environment_id)), id_param(folder_id), id_param(request_id)] + all_some(
+                [
+                    owner,
+                    t.access_token,
+                    t.token_type,
+                    t.refresh_token,
+                    to_string(t.expires_at),
+                    t.scope,
+                    to_string(t.obtained_at),
+                    t.config
+                ]
+            )
         )
     })
 }

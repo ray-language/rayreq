@@ -35,8 +35,8 @@ tests, written first) and the end-to-end check (`make check`) drives them throug
   user's choice (a setting), not an accident.
 - **R5 — Every capture reports a result:** `applied`, `no_active_environment`, `invalid_json`,
   `path_not_found`, `skipped_error_status`, `failed`. The response pane shows them.
-- **R6 — Captured values keep their JSON text.** Numbers as written in the body (`json.reindent`
-  and the text, never a float round trip: 64-bit ids survive), strings unquoted, `null` as empty,
+- **R6 — Captured values keep their JSON text.** Numbers as written in the body (read through
+  `json.Doc`, which keeps each number's text: never a float round trip, 64-bit ids survive), strings unquoted, `null` as empty,
   objects and arrays as compact JSON.
 - **R7 — One resolver.** The list the page shows (autocomplete, hover) and the send come from the
   same function in the program, with the source of each winning value (`environment` or the

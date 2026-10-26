@@ -1,7 +1,7 @@
 // YAML as API descriptions write it, read into the ordered tree; compared through its JSON.
 
 import node;
-import yaml;
+import yaml/yaml;
 
 fn as_json(text: string) -> string {
     match (yaml.parse(text)) {

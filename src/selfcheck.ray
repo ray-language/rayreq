@@ -98,8 +98,11 @@ pub fn start_server() -> Result<int, string> {
     let l = net.tcp_listen("127.0.0.1", 0)?;
     let port = net.local_port(l);
     let _server = spawn(fn() {
-        let _ = webserver.serve_options_on(l, webserver.options()
-            .quiet(), fn() -> fn(webserver.Request) -> webserver.Response { echo });
+        let _ = webserver.serve_options_on(
+            l,
+            webserver.options().quiet(),
+            fn() -> fn(webserver.Request) -> webserver.Response { echo }
+        );
     });
     let _watchdog = spawn(fn() {
         time.sleep(WATCHDOG_MS);

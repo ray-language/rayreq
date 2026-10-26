@@ -12,10 +12,11 @@
 //! What cannot be imported (multipart bodies, OAuth 2 flows, cookie API keys, other files'
 //! `$ref`s…) is listed in `warnings`.
 
+import std/json;
 import std/url;
+import yaml/yaml;
 import model;
 import node;
-import yaml;
 from node import Node;
 
 pub struct Group {
@@ -109,10 +110,10 @@ pub fn convert(root: Node) -> Result<Imported, string> {
     let schemes = if (v2) {
         node.entries_at(root, "securityDefinitions")
     } else {
-        node.entries_at(node.get(root, "components").unwrap_or(Node.Null), "securitySchemes")
+        node.entries_at(node.get(root, "components").unwrap_or(json.Doc.Null), "securitySchemes")
     };
     var cx = Ctx { root: root, v2: v2, schemes: schemes, variables: [], warnings: [], budget: 0 };
-    let info = node.get(root, "info").unwrap_or(Node.Null);
+    let info = node.get(root, "info").unwrap_or(json.Doc.Null);
     var title = clip(first_line(node.str_at(info, "title")));
     if (title == "") {
         title = "API";
@@ -305,13 +306,13 @@ fn deref(cx: Ctx, n: Node) -> Node {
                 } else {
                     warn(cx, "references to other files are not followed: ${ref}");
                 }
-                return Node.Obj([]);
+                return node.obj([]);
             },
         };
         hops = hops + 1;
     }
     warn(cx, "a loop of references");
-    Node.Obj([])
+    node.obj([])
 }
 
 // ---- servers -------------------------------------------------------------------------------
@@ -556,9 +557,9 @@ fn schema_value(s: Node) -> Option<Node> {
 /// A value as a parameter's text: a list joined with commas, an object as JSON.
 fn value_text(v: Node) -> string {
     match (v) {
-        Node.Null => "",
-        Node.List(xs) => xs.map(value_text).join(","),
-        Node.Obj(_) => node.to_json(v, 0),
+        json.Doc.Null => "",
+        json.Doc.List(xs) => xs.map(value_text).join(","),
+        json.Doc.Obj(_) => node.to_json(v, 0),
         _ => node.text(v).unwrap_or(""),
     }
 }
@@ -602,7 +603,7 @@ fn body_v3(cx: Ctx, r: model.Request, label: string, rb: Node) {
     }
     let (mt, media) = chosen;
     // The schema as written: `sample` follows its $ref itself, to see a type refer to itself.
-    let raw_schema = node.get(media, "schema").unwrap_or(Node.Obj([]));
+    let raw_schema = node.get(media, "schema").unwrap_or(node.obj([]));
     let schema = deref(cx, raw_schema);
     let example = match (node.get(media, "example")) {
         Option.Some(v) => Option.Some(v),
@@ -645,7 +646,7 @@ fn body_v3(cx: Ctx, r: model.Request, label: string, rb: Node) {
 
 fn text_example(example: Option<Node>) -> string {
     match (example) {
-        Option.Some(Node.Str(s)) => s,
+        Option.Some(json.Doc.Str(s)) => s,
         _ => "",
     }
 }
@@ -653,8 +654,9 @@ fn text_example(example: Option<Node>) -> string {
 /// The fields of a form body: the example's, else the schema's properties (the required ones
 /// on).
 fn form_fields(cx: Ctx, schema: Node, example: Option<Node>) -> [model.Pair] {
-    if let Option.Some(Node.Obj(fields)) = example {
-        return fields.map(fn(f: (string, Node)) -> model.Pair { model.Pair { key: f.0, value: value_text(f.1), enabled: true } });
+    if let Option.Some(json.Doc.Obj(_)) = example {
+        return node.entries(example.unwrap())
+            .map(fn(f: (string, Node)) -> model.Pair { model.Pair { key: f.0, value: value_text(f.1), enabled: true } });
     }
     let required = node.items_at(schema, "required")
         .map(fn(n: Node) -> string { node.text(n).unwrap_or("") });
@@ -696,13 +698,14 @@ fn multipart_parts(cx: Ctx, schema: Node, media: Node) -> [model.Part] {
         }
         // An array of files is one part per file: one row to start with.
         let item = if (type_of(prop) == "array") {
-            deref(cx, node.get(prop, "items").unwrap_or(Node.Obj([])))
+            deref(cx, node.get(prop, "items").unwrap_or(node.obj([])))
         } else {
             prop
         };
         let file = is_file_schema(item);
         let declared = node.str_at(
-            node.get(node.get(media, "encoding").unwrap_or(Node.Null), k).unwrap_or(Node.Null),
+            node.get(node.get(media, "encoding").unwrap_or(json.Doc.Null), k)
+                .unwrap_or(json.Doc.Null),
             "contentType"
         );
         let ctype = if (declared.contains(",") || declared.contains("*")) { "" } else { declared };
@@ -745,7 +748,7 @@ fn body_v2(cx: Ctx, r: model.Request, label: string, op: Node, params: [Node]) {
     }.map(fn(n: Node) -> string { node.text(n).unwrap_or("") });
     for p in params {
         if (node.str_at(p, "in") == "body") {
-            let schema = node.get(p, "schema").unwrap_or(Node.Obj([]));
+            let schema = node.get(p, "schema").unwrap_or(node.obj([]));
             let json_ok = consumes.len() == 0
                 || consumes.filter(fn(c: string) -> bool { body_kind(c) == "json" }).len() > 0;
             if (json_ok) {
@@ -826,14 +829,14 @@ fn sample_body(cx: Ctx, schema: Node) -> Node {
 fn sample(cx: Ctx, raw: Node, depth: int, seen: [string]) -> Node {
     cx.budget = cx.budget - 1;
     if (depth > SAMPLE_DEPTH || cx.budget < 0) {
-        return Node.Null;
+        return json.Doc.Null;
     }
     // A schema that refers to itself (a tree of categories) stops at the second visit.
     var path = seen;
     if let Option.Some(r) = node.get(raw, "$ref") {
         let ref = node.text(r).unwrap_or("");
         if (seen.contains(ref)) {
-            return Node.Null;
+            return json.Doc.Null;
         }
         path = seen + [ref];
     }
@@ -844,12 +847,12 @@ fn sample(cx: Ctx, raw: Node, depth: int, seen: [string]) -> Node {
     let all = node.items_at(s, "allOf");
     if (all.len() > 0) {
         var fields: [(string, Node)] = [];
-        var other = Node.Null;
+        var other = json.Doc.Null;
         for part in all {
             match (sample(cx, part, depth + 1, path)) {
-                Node.Obj(fs) => {
-                    for (k, v) in fs {
-                        node.put(fields, k, v);
+                json.Doc.Obj(fs) => {
+                    for m in fs {
+                        node.put(fields, m.key, m.value);
                     }
                 },
                 x => other = x,
@@ -859,7 +862,7 @@ fn sample(cx: Ctx, raw: Node, depth: int, seen: [string]) -> Node {
         for (k, v) in sample_properties(cx, s, depth, path) {
             node.put(fields, k, v);
         }
-        return if (fields.len() == 0) { other } else { Node.Obj(fields) };
+        return if (fields.len() == 0) { other } else { node.obj(fields) };
     }
     for key in ["oneOf", "anyOf"] {
         let options = node.items_at(s, key);
@@ -869,22 +872,22 @@ fn sample(cx: Ctx, raw: Node, depth: int, seen: [string]) -> Node {
     }
     let kind = type_of(s);
     match (kind) {
-        "object" => Node.Obj(sample_properties(cx, s, depth, path)),
+        "object" => node.obj(sample_properties(cx, s, depth, path)),
         "array" => match (node.get(s, "items")) {
             Option.Some(items) => {
                 let item = sample(cx, items, depth + 1, path);
                 match (item) {
-                    Node.Null => Node.List([]),
-                    _ => Node.List([item]),
+                    json.Doc.Null => json.Doc.List([]),
+                    _ => json.Doc.List([item]),
                 }
             },
-            Option.None => Node.List([]),
+            Option.None => json.Doc.List([]),
         },
-        "string" => Node.Str(string_sample(node.str_at(s, "format"))),
-        "integer" => Node.Num("0"),
-        "number" => Node.Num("0"),
-        "boolean" => Node.Bool(true),
-        _ => Node.Null,
+        "string" => json.Doc.Str(string_sample(node.str_at(s, "format"))),
+        "integer" => json.Doc.Num("0"),
+        "number" => json.Doc.Num("0"),
+        "boolean" => json.Doc.Bool(true),
+        _ => json.Doc.Null,
     }
 }
 
@@ -903,8 +906,8 @@ fn sample_properties(cx: Ctx, s: Node, depth: int, seen: [string]) -> [(string, 
 /// keywords imply.
 fn type_of(s: Node) -> string {
     match (node.get(s, "type")) {
-        Option.Some(Node.Str(t)) => return t,
-        Option.Some(Node.List(ts)) => {
+        Option.Some(json.Doc.Str(t)) => return t,
+        Option.Some(json.Doc.List(ts)) => {
             for t in ts {
                 let name = node.text(t).unwrap_or("");
                 if (name != "null") {
@@ -967,7 +970,7 @@ fn auth_for(cx: Ctx, sec: Node) -> model.Auth {
             "a security requirement combines ${requirement.len()} schemes; only '${scheme_name}' is set up"
         );
     }
-    var scheme = Node.Null;
+    var scheme = json.Doc.Null;
     for (n, sch) in cx.schemes {
         if (n == scheme_name) {
             scheme = deref(cx, sch);

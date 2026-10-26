@@ -1,0 +1,26 @@
+// The bar switches language in place: titles (ui.rename_menu) and items, and the bridge's
+// record of it (what the command palette lists) follows. Headless, ui keeps the bar in memory.
+
+import elements/bridge;
+import menus;
+
+fn titles_of(n: bridge.Native) -> string {
+    var out: [string] = [];
+    for m in n.menus {
+        out.push(m.title);
+    }
+    out.join(",")
+}
+
+@test
+fn a_language_change_renames_the_menus_and_relabels_their_items() {
+    let n = bridge.system();
+    menus.install(n, "en").unwrap();
+    assert_eq(titles_of(n), "File,Request,View");
+    menus.relabel(n, "en", "es").unwrap();
+    assert_eq(titles_of(n), "Archivo,Petición,Ver");
+    assert_eq(n.menus[0].items[0].title, "Nueva petición");
+    menus.relabel(n, "es", "en").unwrap();
+    assert_eq(titles_of(n), "File,Request,View");
+    assert_eq(n.menus[1].items[0].title, "Send");
+}

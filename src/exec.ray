@@ -13,6 +13,10 @@ import urls;
 
 pub const USER_AGENT: string = "rayreq/0.1.0";
 
+/// Headers net/http always writes itself (lower case); a second one would make the request
+/// invalid (two Host or two Content-Length lines), so they cannot be given.
+const OWN_HEADERS: [string] = ["host", "content-length", "transfer-encoding", "connection"];
+
 /// A request ready to go: the URL parsed and encoded, the enabled headers (plus the defaults)
 /// and the body as bytes.
 pub struct Prepared {
@@ -172,6 +176,10 @@ pub fn prepare(r: model.Request) -> Result<Prepared, string> {
         if (h.value.contains("\r") || h.value.contains("\n")) {
             return Result.Err("the value of header '${name}' contains a line break");
         }
+        if (OWN_HEADERS.contains(name.to_lower())) {
+            // net/http writes its own and would send both: an invalid request.
+            return Result.Err("the client sets '${name}' itself; remove that header");
+        }
         headers.push((name, h.value.trim()));
     }
     var body = match (r.body_type) {
@@ -228,79 +236,45 @@ struct Reply {
     body: bytes,
 }
 
-/// net/http takes a Map: repeated names (case-insensitive) are joined with ", " (RFC 9110
-/// §5.3), keeping the spelling of the first. Cookie is joined with "; " (RFC 6265).
-fn header_map(hs: [(string, string)]) -> Map<string, string> {
-    let m: Map<string, string> = Map.new();
-    let spelled: Map<string, string> = Map.new();
+/// The headers as given, in order and with repeats, except Cookie: RFC 6265 allows only one
+/// Cookie line, so repeated ones are joined with "; " where the first one was.
+fn header_pairs(hs: [(string, string)]) -> [(string, string)] {
+    var out: [(string, string)] = [];
+    var cookie_at = -1;
     for (k, v) in hs {
-        let low = k.to_lower();
-        match (spelled.get(low)) {
-            Option.Some(name) => {
-                let sep = if (low == "cookie") { "; " } else { ", " };
-                m.insert(name, m.get_or(name, "") + sep + v);
-            },
-            Option.None => {
-                spelled.insert(low, k);
-                m.insert(k, v);
-            },
-        }
-    }
-    m
-}
-
-/// The headers as they go out: ours, joined like `header_map`, plus the ones net/http adds
-/// by itself (observed on the wire: Host, Content-Length, Accept-Encoding, Connection).
-pub fn wire_headers(p: Prepared) -> [(string, string)] {
-    var out: [(string, string)] = [("Host", urls.authority(p.url))];
-    let m = header_map(p.headers);
-    var seen: [string] = [];
-    for (k, _v) in p.headers {
-        if (seen.contains(k.to_lower())) {
-            continue;
-        }
-        seen.push(k.to_lower());
-        // The key in the map is the first spelling.
-        for (mk, mv) in m {
-            if (mk.to_lower() == k.to_lower()) {
-                out.push((mk, mv));
+        if (k.to_lower() == "cookie") {
+            if (cookie_at >= 0) {
+                out[cookie_at] = (out[cookie_at].0, out[cookie_at].1 + "; " + v);
+                continue;
             }
+            cookie_at = out.len();
         }
+        out.push((k, v));
     }
-    if (p.body.len() > 0 || ["POST", "PUT", "PATCH"].contains(p.method)) {
-        if (!seen.contains("content-length")) {
-            out.push(("Content-Length", to_string(p.body.len())));
-        }
-    }
-    if (!seen.contains("accept-encoding")) {
-        out.push(("Accept-Encoding", "gzip"));
-    }
-    out.push(("Connection", "close"));
     out
 }
 
-fn send_once(p: Prepared, timeout_ms: int) -> Result<Reply, string> {
-    let target = urls.render(p.url);
-    let hs = header_map(p.headers);
-    if (p.method == "HEAD") {
-        // request_bytes waits for a body a HEAD response never has (it fails with "truncated
-        // response"); the streaming client knows HEAD has none.
-        let idle = if (timeout_ms > 0) { timeout_ms } else { model.MAX_TIMEOUT_MS };
-        let s = http.stream_with("HEAD", target, p.body, hs, idle)?;
-        while (true) {
-            match (http.stream_read(s)?) {
-                Option.Some(_) => { },
-                Option.None => break,
-            }
-        }
-        http.stream_close(s);
-        var headers: [(string, string)] = [];
-        for (k, v) in s.headers {
-            headers.push((k.to_lower(), v));
-        }
-        return Result.Ok(Reply { status: s.status, headers: headers, body: b"" });
+/// The headers as they go out: the ones net/http writes first by itself (Host, Connection,
+/// Accept-Encoding unless given, Content-Length when there is a body), then ours.
+pub fn wire_headers(p: Prepared) -> [(string, string)] {
+    var out: [(string, string)] = [("Host", urls.authority(p.url)), ("Connection", "close")];
+    if (!lower_names(p.headers).contains("accept-encoding")) {
+        out.push(("Accept-Encoding", "gzip"));
     }
-    let r = http.request_bytes(p.method, target, p.body, hs, timeout_ms)?;
+    if (p.body.len() > 0) {
+        out.push(("Content-Length", to_string(p.body.len())));
+    }
+    out + header_pairs(p.headers)
+}
+
+fn send_once(p: Prepared, timeout_ms: int) -> Result<Reply, string> {
+    let r = http.request_pairs(
+        p.method,
+        urls.render(p.url),
+        p.body,
+        header_pairs(p.headers),
+        timeout_ms
+    )?;
     var headers: [(string, string)] = [];
     for (k, v) in r.raw_headers {
         headers.push((k.to_lower(), v));

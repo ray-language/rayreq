@@ -79,13 +79,15 @@ fn resolves_redirect_locations() {
         "https://cdn.example.com/a"
     );
     assert_eq(urls.render(urls.resolve(base, "http://other:81/").unwrap()), "http://other:81/");
-}
-
-@test
-fn removes_dot_segments() {
-    assert_eq(urls.remove_dots("/a/b/../c/./d"), "/a/c/d");
-    assert_eq(urls.remove_dots("/../../x"), "/x");
-    assert_eq(urls.remove_dots("/a/b/.."), "/a/");
+    // What some servers send: a space, and a fragment that never goes on the wire.
+    assert_eq(
+        urls.render(urls.resolve(base, "./a b/../c#top").unwrap()),
+        "https://api.example.com/v1/users/c"
+    );
+    assert_eq(
+        urls.render(urls.resolve(base, "x y").unwrap()),
+        "https://api.example.com/v1/users/x%20y"
+    );
 }
 
 @test

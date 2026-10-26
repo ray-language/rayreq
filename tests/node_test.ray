@@ -29,38 +29,42 @@ fn keys_keep_their_order_and_numbers_their_text() {
 
 @test
 fn strings_and_escapes() {
-    let n = parsed(`["a\\"b\\\\c\\/\\n\\u00e9\\ud83d\\ude00", "\\ud800x"]`);
+    let n = parsed(`["a\\"b\\\\c\\/\\n\\u00e9\\ud83d\\ude00"]`);
     assert_eq(node.text(node.items(n)[0]).unwrap(), "a\"b\\c/\né😀");
-    assert_eq(
-        node.text(node.items(n)[1]).unwrap(),
-        char_from_code(0xFFFD).unwrap().to_string() + "x"
-    );
+    // A lone surrogate is not text (RFC 8259 §8.2): refused.
+    assert(node.parse_json(`["\\ud800x"]`).is_err());
     assert_eq(node.quote("a\"\\\n\u{1}ñ"), `"a\\"\\\\\\n\\u0001ñ"`);
 }
 
 @test
-fn a_repeated_key_keeps_its_place_and_the_last_value() {
-    assert_eq(node.to_json(parsed(`{"a":1,"b":2,"a":3}`), 0), `{"a":3,"b":2}`);
+fn a_repeated_key_reads_once_in_its_place_with_the_last_value() {
+    let n = parsed(`{"a":1,"b":2,"a":3}`);
+    assert_eq(node.str_at(n, "a"), "3");
+    assert_eq(
+        node.entries(n).map(fn(e: (string, Node)) -> string { "${e.0}=${node.to_json(e.1, 0)}" }),
+        ["a=3", "b=2"]
+    );
 }
 
 @test
-fn errors_say_where() {
+fn errors_say_what() {
+    // json.parse_doc gives no line or column (findings #276).
     for (text, want) in [
-        ("{\"a\" 1}", "line 1 column 6: expected ':'"),
-        ("[1,\n 2,]", "line 2 column 4: unexpected ']'"),
-        ("[01]", "expected ',' or ']'"),
+        ("{\"a\" 1}", "expected ':'"),
+        ("[01]", "invalid number"),
         ("\"abc", "unterminated string"),
-        ("{} x", "unexpected text after the document"),
-        ("", "unexpected end of the text"),
-        ("tru", "expected 'true'"),
-        ("\"\\q\"", "invalid escape")
+        ("{} x", "trailing text"),
+        ("", "unexpected end"),
+        ("\"\\q\"", "escape")
     ] {
         match (node.parse_json(text)) {
             Result.Ok(_) => panic("accepted ${text}"),
-            Result.Err(e) => assert_eq_msg(e.contains(want), true, e),
+            Result.Err(e) => assert_eq_msg(e.starts_with("JSON: ") && e.contains(want), true, e),
         }
     }
     assert(node.parse_json("[".repeat(300) + "]".repeat(300)).is_err());
+    // A byte order mark is skipped.
+    assert_eq(node.to_json(parsed("\u{FEFF}{\"a\":1}"), 0), `{"a":1}`);
 }
 
 @test
