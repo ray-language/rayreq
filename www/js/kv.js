@@ -7,7 +7,6 @@ import { getHost, hostCan } from "@raylang/elements";
 import { el } from "./util.js";
 import { t } from "./i18n.js";
 import { varField } from "./varfield.js";
-import "./mode-input.js";
 import { CONTENT_TYPES, completeField } from "./complete.js";
 
 export class KvEditor {
@@ -135,7 +134,7 @@ export class PartsEditor extends KvEditor {
 
   /// A part's value says what it is: text, or the path of a file (the mode on its right).
   valueElement(row) {
-    const value = el("rr-mode-input", { size: "xs", display: "label", "menu-label": t("parts.kind"), spellcheck: "false", autocapitalize: "off" });
+    const value = el("ray-mode-input", { size: "xs", display: "label", "menu-label": t("parts.kind"), spellcheck: "false", autocapitalize: "off" });
     value.options = [
       { value: "text", label: t("parts.text"), attrs: { placeholder: t("kv.value"), "aria-label": t("kv.value") } },
       { value: "file", label: t("parts.file"), icon: "file", attrs: { placeholder: t("parts.path"), "aria-label": t("parts.path") } },

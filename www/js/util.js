@@ -130,33 +130,12 @@ export function debounce(fn, ms) {
   };
 }
 
-/// A row of tabs wider than its bar scrolls sideways with its scrollbar hidden; this says so.
-/// `host` gets data-more-start / data-more-end while `scroller` hides tabs on that side (the
-/// CSS fades that edge), a vertical wheel scrolls it sideways, and the selected tab is kept in
-/// view. `scroller` is `host` itself or, for <ray-tabs>, the list in its shadow root.
-export function sideScroller(host, scroller = host) {
-  const update = () => {
-    const hidden = scroller.scrollWidth - scroller.clientWidth;
-    host.toggleAttribute("data-more-start", hidden > 1 && scroller.scrollLeft > 1);
-    host.toggleAttribute("data-more-end", hidden > 1 && scroller.scrollLeft < hidden - 1);
-  };
-  const reveal = () => {
-    const selected = host.querySelector(':scope > [data-active], :scope > [aria-selected="true"]');
-    if (selected) selected.scrollIntoView({ block: "nearest", inline: "nearest" });
-    update();
-  };
-  scroller.addEventListener("scroll", update, { passive: true });
-  scroller.addEventListener("wheel", (e) => {
-    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || scroller.scrollWidth <= scroller.clientWidth) return;
-    scroller.scrollLeft += e.deltaY;
-    e.preventDefault();
-  }, { passive: false });
-  new ResizeObserver(update).observe(scroller);
-  // Tabs come and go, badges change their width, and the selection moves.
-  new MutationObserver(reveal).observe(host, {
-    childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-active", "aria-selected", "hidden"],
-  });
-  reveal();
+/// A tab's count (`n`: a number or text like "1/2"; 0 or "" hides it), colored when it says
+/// something (`color`: orange, red, green).
+export function setCount(tab, n, color = "") {
+  tab.count = n ? String(n) : null;
+  if (color) tab.dataset.color = color;
+  else delete tab.dataset.color;
 }
 
 export function clone(v) {

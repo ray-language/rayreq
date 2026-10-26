@@ -8,7 +8,7 @@ import { AssertionsEditor } from "./assertions.js";
 import { AUTH_NAMES, AuthEditor } from "./auth.js";
 import { KvEditor, PartsEditor } from "./kv.js";
 import { activeTab, emit, on, state } from "./state.js";
-import { $, debounce, paramsFromUrl, parseJsonTemplate, reindentJson, urlFromParams } from "./util.js";
+import { $, debounce, paramsFromUrl, parseJsonTemplate, reindentJson, setCount, urlFromParams } from "./util.js";
 import { refreshVariables, refreshVariablesSoon, renderVariables } from "./variables.js";
 import { refreshFields, varField } from "./varfield.js";
 import { headerValues } from "./complete.js";
@@ -34,15 +34,10 @@ function changed() {
 }
 
 function updateCounts(d) {
-  const set = (id, n) => {
-    const b = $(id);
-    b.textContent = String(n);
-    b.hidden = n === 0;
-  };
-  set("count-params", d.params.filter((p) => p.enabled).length);
-  set("count-headers", d.headers.filter((h) => h.enabled && h.key).length);
-  set("count-captures", (d.captures || []).filter((c) => c.enabled && c.key).length);
-  set("count-assertions", (d.assertions || []).filter((a) => a.enabled).length);
+  setCount($("req-params-tab"), d.params.filter((p) => p.enabled).length);
+  setCount($("req-headers-tab"), d.headers.filter((h) => h.enabled && h.key).length);
+  setCount($("req-captures-tab"), (d.captures || []).filter((c) => c.enabled && c.key).length);
+  setCount($("req-assertions-tab"), (d.assertions || []).filter((a) => a.enabled).length);
   $("has-body").hidden = d.body_type === "none";
 }
 

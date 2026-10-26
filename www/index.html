@@ -14,7 +14,7 @@
 <ray-app-shell id="shell" padding="0">
   <header slot="header" class="topbar">
     <ray-icon-button id="toggle-sidebar" variant="subtle" size="xs" label="Toggle sidebar" data-i18n-attr="label:view.toggleSidebar"><ray-icon name="panel-left"></ray-icon></ray-icon-button>
-    <div id="tabs" class="tabstrip" role="tablist" data-i18n-attr="aria-label:tabs.label"></div>
+    <ray-doc-tabs id="tabs" class="tabstrip" panel="workspace" data-i18n-attr="label:tabs.label,close-label:tabs.close,dirty-label:tabs.dirty"></ray-doc-tabs>
     <ray-group gap="xs" class="top-actions">
       <ray-group gap="0" class="env-picker">
         <ray-select id="environment" size="xs" data-i18n-attr="aria-label:env.label,placeholder:env.label"></ray-select>
@@ -85,14 +85,14 @@
 
         <ray-split id="panes" class="panes" position="53%" min="320" autosave="rayreq.panes" data-i18n-attr="aria-label:panes.resize">
           <section slot="start" class="pane request-pane" data-i18n-attr="aria-label:request.label">
-            <ray-tabs id="req-tabs" value="params" class="pane-tabs">
-              <ray-tab value="params"><span data-i18n="request.params"></span><span slot="right" class="tab-count" id="count-params" hidden></span></ray-tab>
-              <ray-tab value="headers"><span data-i18n="request.headers"></span><span slot="right" class="tab-count" id="count-headers" hidden></span></ray-tab>
+            <ray-tabs id="req-tabs" value="params" size="xs" class="pane-tabs">
+              <ray-tab value="params" id="req-params-tab"><span data-i18n="request.params"></span></ray-tab>
+              <ray-tab value="headers" id="req-headers-tab"><span data-i18n="request.headers"></span></ray-tab>
               <ray-tab value="auth"><span data-i18n="request.auth"></span><ray-badge slot="right" size="xs" variant="dot" color="green" id="has-auth" hidden></ray-badge></ray-tab>
               <ray-tab value="body"><span data-i18n="request.body"></span><ray-badge slot="right" size="xs" variant="dot" id="has-body" hidden></ray-badge></ray-tab>
-              <ray-tab value="captures"><span data-i18n="request.captures"></span><span slot="right" class="tab-count" id="count-captures" hidden></span></ray-tab>
-              <ray-tab value="assertions"><span data-i18n="request.assertions"></span><span slot="right" class="tab-count" id="count-assertions" hidden></span></ray-tab>
-              <ray-tab value="variables"><span data-i18n="request.variables"></span><span slot="right" class="tab-count" data-color="orange" id="count-missing" hidden></span></ray-tab>
+              <ray-tab value="captures" id="req-captures-tab"><span data-i18n="request.captures"></span></ray-tab>
+              <ray-tab value="assertions" id="req-assertions-tab"><span data-i18n="request.assertions"></span></ray-tab>
+              <ray-tab value="variables" id="req-variables-tab" data-color="orange"><span data-i18n="request.variables"></span></ray-tab>
               <ray-tab value="settings" class="icon-tab" data-i18n-attr="aria-label:request.settings,title:request.settings"><ray-icon name="settings"></ray-icon></ray-tab>
               <ray-tab-panel value="params"><div id="params" class="kv"></div></ray-tab-panel>
               <ray-tab-panel value="headers"><div id="headers" class="kv"></div></ray-tab-panel>
@@ -165,12 +165,12 @@
               <ray-alert id="response-error" color="red" variant="light" hidden></ray-alert>
               <ray-alert id="response-unresolved" color="orange" variant="light" hidden></ray-alert>
               <ray-alert id="response-cookies" color="orange" variant="light" hidden></ray-alert>
-              <ray-tabs id="res-tabs" value="body" class="pane-tabs">
+              <ray-tabs id="res-tabs" value="body" size="xs" class="pane-tabs">
                 <ray-tab value="body" id="res-body-tab"><span data-i18n="response.body"></span></ray-tab>
-                <ray-tab value="headers" id="res-headers-tab"><span data-i18n="response.headers"></span><span slot="right" class="tab-count" id="count-res-headers"></span></ray-tab>
+                <ray-tab value="headers" id="res-headers-tab"><span data-i18n="response.headers"></span></ray-tab>
                 <ray-tab value="request"><span data-i18n="response.request"></span></ray-tab>
-                <ray-tab value="captures" id="res-captures-tab" hidden><span data-i18n="response.captures"></span><span slot="right" class="tab-count" id="count-res-captures"></span></ray-tab>
-                <ray-tab value="assertions" id="res-assertions-tab" hidden><span data-i18n="response.assertions"></span><span slot="right" class="tab-count" id="count-res-assertions"></span></ray-tab>
+                <ray-tab value="captures" id="res-captures-tab" hidden><span data-i18n="response.captures"></span></ray-tab>
+                <ray-tab value="assertions" id="res-assertions-tab" hidden><span data-i18n="response.assertions"></span></ray-tab>
                 <ray-tab value="history"><span data-i18n="response.history"></span></ray-tab>
               <ray-tab-panel value="body">
                   <ray-group gap="xs" class="body-tools" id="body-tools">

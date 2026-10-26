@@ -90,57 +90,27 @@ ray-toaster { bottom: 1.5rem; }
   box-sizing: border-box; padding: var(--ray-space-1) var(--ray-space-xs); min-width: 0;
 }
 .top-actions { flex: none; flex-wrap: nowrap; }
-.tabstrip { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; height: 100%; }
-.tabstrip::-webkit-scrollbar { display: none; }
-/* A tab bar wider than its room scrolls sideways (util.js sideScroller): the edge that hides
-   tabs fades out. */
-.tabstrip, .pane-tabs::part(list) {
-  --fade: linear-gradient(to right, transparent, #000 var(--fade-start, 0px), #000 calc(100% - var(--fade-end, 0px)), transparent);
-  -webkit-mask-image: var(--fade); mask-image: var(--fade);
-}
-[data-more-start] { --fade-start: 2.5rem; }
-[data-more-end] { --fade-end: 2.5rem; }
-/* Compact enough that every tab of a pane fits at the default window size (1280 px, sidebar
-   open): the label at xs, a tight padding, the count close to it. */
-/* A tab's count: a small number beside its label (a pill per tab would not fit), colored
-   only when it says something (missing variables, failed tests). */
+/* The open requests: as tall as the header's other controls (opening the first one does not
+   change the header's height), the label at xs like the rest of the header. */
+.tabstrip { flex: 1 1 auto; height: 100%; }
+.tabstrip > ray-doc-tab { font-size: var(--ray-font-size-xs); }
+.tabstrip .name { overflow: hidden; text-overflow: ellipsis; }
+.tabstrip .method-tag { width: auto; }
+/* A pane's tabs are size xs, tighter still so every one fits at the default window size (1280
+   px, sidebar open). The list is inset by what the panel pads its content less what a tab pads
+   its label, so the first label starts where the panel's content does. */
+.pane-tabs > ray-tab { padding-inline: 0.375rem; }
 .pane-tabs > ray-tab.icon-tab { font-size: var(--ray-font-size-sm); }
-.tab-count { font-size: 0.6875rem; font-variant-numeric: tabular-nums; color: var(--ray-muted-foreground); }
-.tab-count[data-color="orange"] { color: var(--ray-orange-light-color); font-weight: var(--ray-font-weight-medium); }
-.tab-count[data-color="red"] { color: var(--ray-red-light-color); font-weight: var(--ray-font-weight-medium); }
-.tab-count[data-color="green"] { color: var(--ray-green-light-color); }
-/* The list is inset by what the panel pads its content less what a tab pads its label, so the
-   first label starts where the panel's content does. */
 .pane-tabs::part(list) { padding-inline: calc(var(--ray-space-sm) - 0.375rem); }
-.pane-tabs > ray-tab {
-  padding-inline: 0.375rem; gap: var(--ray-space-1);
-  min-height: var(--ray-control-height-xs); font-size: var(--ray-font-size-xs);
-}
-/* Tabs are no taller than the header's other controls, so opening the first one does not
-   change the header's height. */
-.tab {
-  box-sizing: border-box; display: flex; align-items: center; gap: var(--ray-space-2); max-width: 14rem; flex: none;
-  height: var(--ray-control-height-xs); padding-inline: var(--ray-space-3) var(--ray-space-1);
-  border-radius: var(--ray-radius-sm); border: 1px solid transparent;
-  font-size: var(--ray-font-size-xs); color: var(--ray-muted-foreground); cursor: default; background: none;
-  font-family: inherit;
-}
-.tab:hover { background: var(--ray-muted); color: var(--ray-foreground); }
-.tab[aria-selected="true"] { background: var(--ray-card); border-color: var(--ray-border); color: var(--ray-foreground); }
-.tab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tab .dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--ray-primary); flex: none; }
-/* The × is a pointer target only (the tab closes with Delete): a small square of its own. */
-.tab .close {
-  flex: none; display: inline-grid; place-items: center;
-  width: 1.25rem; height: 1.25rem; border-radius: var(--ray-radius-sm);
-  color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs);
-}
-.tab .close:hover { background: var(--ray-muted); color: var(--ray-foreground); }
+/* A count colored only when it says something (missing variables, failed tests). */
+ray-tab[data-color]::part(count) { font-weight: var(--ray-font-weight-medium); }
+ray-tab[data-color="orange"]::part(count) { color: var(--ray-orange-light-color); opacity: 1; }
+ray-tab[data-color="red"]::part(count) { color: var(--ray-red-light-color); opacity: 1; }
+ray-tab[data-color="green"]::part(count) { color: var(--ray-green-light-color); opacity: 1; }
 ray-theme-toggle::part(button) { border-color: transparent; }
 .accent-dot { fill: var(--ray-primary-filled); stroke: var(--ray-border); stroke-width: 1; }
 .accent-swatch { width: 0.875rem; height: 0.875rem; border-radius: 50%; background: light-dark(var(--swatch), var(--swatch-dark)); box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12); flex: none; }
 ray-menu-item:not([data-current]) .accent-check { visibility: hidden; }
-.tab:not(:hover):not([aria-selected="true"]) .close { visibility: hidden; }
 
 /* ---- workspace ------------------------------------------------------------------------- */
 
@@ -154,13 +124,11 @@ ray-menu-item:not([data-current]) .accent-check { visibility: hidden; }
 .pane-tabs::part(panels) { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--ray-space-sm); }
 
 .kv-row { display: grid; grid-template-columns: 1fr 1.4fr auto auto; gap: var(--ray-space-2); align-items: center; margin-block-end: var(--ray-space-1); }
-.kv-row ray-input::part(input), .kv-row rr-mode-input::part(input) { font-family: var(--ray-font-mono); font-size: var(--ray-font-size-xs); }
-.kv-row.off ray-input, .kv-row.off rr-mode-input { opacity: 0.55; }
+.kv-row ray-input::part(input), .kv-row ray-mode-input::part(input) { font-family: var(--ray-font-mono); font-size: var(--ray-font-size-xs); }
+.kv-row.off ray-input, .kv-row.off ray-mode-input { opacity: 0.55; }
 .kv { container-type: inline-size; }
 .kv-row > ray-input, .kv-row > ray-select { min-width: 0; }
-/* ray-icon-button has no intrinsic width in WebKit (its inner button is flex: 1): an auto
-   track would shrink it to nothing. Narrower than its xs square, so the row's checkbox and ×
-   read as one pair of controls. */
+/* Narrower than its xs square, so the row's checkbox and × read as one pair of controls. */
 .kv-row > ray-icon-button { width: 1.5rem; }
 
 /* Assertions have more cells than a half pane holds: on one line when the table is wide, else on
@@ -179,8 +147,8 @@ ray-menu-item:not([data-current]) .accent-check { visibility: hidden; }
 /* A multipart part on one line: its name, its value (text or a file's path, the kind chosen in
    the field itself) and an optional content type. */
 .kv-row.parts { grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr) minmax(0, 0.9fr) auto auto; }
-.kv-row.parts > rr-mode-input { min-width: 0; }
-.kv-row.parts rr-mode-input > ray-icon-button[slot="right"] { width: 1.5rem; }
+.kv-row.parts > ray-mode-input { min-width: 0; }
+.kv-row.parts ray-mode-input > ray-icon-button[slot="right"] { width: 1.5rem; }
 .kv-row.asserts + .kv-row.asserts {
   border-block-start: 1px solid var(--ray-border); padding-block-start: var(--ray-space-2); margin-block-start: var(--ray-space-1);
 }
@@ -317,46 +285,11 @@ table.runner-table td:last-child { font-family: inherit; word-break: normal; }
 
 /* ---- {{variables}} in the fields (varfield.js) ------------------------------------------- */
 
-/* The tints behind each {{name}}: read through the fields' shadow roots, so they follow the theme. */
-:root {
-  --var-ok: color-mix(in srgb, var(--ray-green-light-color) 18%, transparent);
-  --var-missing: color-mix(in srgb, var(--ray-red-light-color) 16%, transparent);
-  --var-missing-line: var(--ray-red-light-color);
+/* A name that resolves is tinted green (one that does not is the fields' "error" mark: red,
+   with a wavy underline). */
+*::part(highlight-var) {
+  background: color-mix(in srgb, var(--ray-green-light-color) 18%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ray-green-light-color) 18%, transparent);
 }
-
-.var-suggest {
-  position: fixed;
-  inset: auto;
-  margin: 0;
-  box-sizing: border-box;
-  width: max-content;
-  min-width: 14rem;
-  max-width: min(30rem, calc(100vw - 16px));
-  max-height: 15rem;
-  overflow-y: auto;
-  padding: var(--ray-space-1);
-  color: var(--ray-popover-foreground);
-  background: var(--ray-popover);
-  border: 1px solid var(--ray-border);
-  border-radius: var(--ray-radius-md);
-  box-shadow: var(--ray-shadow-md);
-  font-size: var(--ray-font-size-xs);
-}
-.var-option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-areas: "name value" "source source";
-  column-gap: var(--ray-space-3);
-  padding: var(--ray-space-1) var(--ray-space-2);
-  border-radius: var(--ray-radius-sm);
-  cursor: default;
-}
-.var-option[aria-selected="true"] { background: var(--ray-accent); color: var(--ray-accent-foreground); }
-.var-option .var-name { grid-area: name; font-family: var(--ray-font-mono); font-weight: var(--ray-font-weight-medium); }
-.var-option .var-value {
-  grid-area: value; font-family: var(--ray-font-mono); color: var(--ray-muted-foreground);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: end;
-}
-.var-option .var-source { grid-area: source; color: var(--ray-muted-foreground); }
-/* A completion's hint is a word about the value ("JSON"), not a value. */
-#complete-list .var-value { font-family: inherit; }
+/* The inline suggestions at the size of the fields' text. */
+*::part(suggestion) { font-size: var(--ray-font-size-xs); }

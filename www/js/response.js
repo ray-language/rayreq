@@ -8,7 +8,7 @@ import { renderResults, tally } from "./assertions.js";
 import { call } from "./api.js";
 import { formatDuration, formatSize, formatTime, formatWhen, t } from "./i18n.js";
 import { activeTab, emit, on } from "./state.js";
-import { $, el } from "./util.js";
+import { $, el, setCount } from "./util.js";
 
 const HIGHLIGHT_LIMIT = 300 * 1024; // bigger bodies are shown plain: highlighting is slow
 
@@ -37,19 +37,10 @@ function statusColor(r) {
   return "gray";
 }
 
-/// What ray-code would show: it removes common indentation and blank edge lines. When that
-/// changes the text, the body is shown in a plain <pre> instead, so it is never altered.
-function dedentChanges(text) {
-  const lines = text.split("\n");
-  if (!lines.length) return false;
-  if (!lines[0].trim() || !lines[lines.length - 1].trim()) return true;
-  const indents = lines.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length);
-  return indents.length > 0 && Math.min(...indents) > 0;
-}
-
 function codeView(text, language) {
-  if (language && text.length <= HIGHLIGHT_LIMIT && !dedentChanges(text)) {
-    const code = el("ray-code", { language, size: "xs", "line-numbers": true, "hide-header": true, wrap });
+  // verbatim: a body is shown and copied as it came, its indentation and blank edges included.
+  if (language && text.length <= HIGHLIGHT_LIMIT) {
+    const code = el("ray-code", { language, size: "xs", "line-numbers": true, "hide-header": true, verbatim: true, wrap });
     code.code = text;
     return code;
   }
@@ -143,7 +134,7 @@ const CAPTURE_COLORS = {
 function renderCaptures(r) {
   const list = r.captures || [];
   $("res-captures-tab").hidden = list.length === 0;
-  $("count-res-captures").textContent = String(list.length);
+  setCount($("res-captures-tab"), list.length);
   const box = $("res-captures");
   box.replaceChildren();
   if (r.environment) box.append(el("p", { class: "note", text: `${t("env.label")}: ${r.environment}` }));
@@ -176,10 +167,7 @@ function renderAssertions(r) {
   const list = r.assertions || [];
   $("res-assertions-tab").hidden = list.length === 0;
   const { passed, failed } = tally(list);
-  const badge = $("count-res-assertions");
-  badge.textContent = `${passed}/${list.length}`;
-  badge.dataset.color = failed ? "red" : "green";
-  badge.dataset.result = failed ? "failed" : "passed";
+  setCount($("res-assertions-tab"), `${passed}/${list.length}`, failed ? "red" : "green");
   renderResults($("res-assertions"), list);
 }
 
@@ -282,7 +270,7 @@ export function renderResponse() {
   $("save-body").closest("ray-tooltip").hidden = !r.ok;
   $("copy-body").disabled = !r.ok || !r.text;
   $("save-body").disabled = !r.ok || !r.history_id || r.kind === "empty";
-  $("count-res-headers").textContent = String((r.headers || []).length);
+  setCount($("res-headers-tab"), (r.headers || []).length);
   // Nothing came back: no body or headers tabs, and the request it tried is what is shown
   // (the tab the user chose stays theirs for the next answer).
   $("res-body-tab").hidden = !r.ok;

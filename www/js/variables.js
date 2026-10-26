@@ -11,7 +11,7 @@ import { formatTime, t } from "./i18n.js";
 import { AuthEditor } from "./auth.js";
 import { KvEditor } from "./kv.js";
 import { activeTab, emit, folderOf, on, state } from "./state.js";
-import { $, PLACEHOLDER, debounce, el } from "./util.js";
+import { $, PLACEHOLDER, debounce, el, setCount } from "./util.js";
 import { sourceText } from "./varfield.js";
 
 // ---- the request's resolved variables -------------------------------------------------------
@@ -44,9 +44,7 @@ export function renderVariables(tab = activeTab()) {
   if (!tab) return;
   const v = tab.vars;
   const missing = v ? v.missing || [] : [];
-  const badge = $("count-missing");
-  badge.textContent = String(missing.length);
-  badge.hidden = missing.length === 0;
+  setCount($("req-variables-tab"), missing.length, "orange");
 
   const preview = $("url-preview");
   const resolved = v && v.url && v.url !== tab.draft.url ? v.url : "";

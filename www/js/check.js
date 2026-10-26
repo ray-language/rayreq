@@ -47,6 +47,12 @@ function inView(tabs, what) {
 /// Two animation frames: what a field paints after a value set from code is on screen.
 const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
+/// The labels a field's suggestion list shows ([] while it is closed).
+function suggested(host) {
+  const list = host.shadowRoot.querySelector('[part="suggestions"]');
+  return list && list.matches(":popover-open") ? [...list.querySelectorAll(".s-label")].map((x) => x.firstChild.textContent) : [];
+}
+
 async function until(cond, what, ms = 8000) {
   const end = Date.now() + ms;
   while (!cond()) {
@@ -100,27 +106,36 @@ export async function run(port, sampleFile) {
         c.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
       };
       const press = (host, k) => host.control.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, composed: true, cancelable: true }));
-      const shown = () => {
-        const box = document.getElementById("complete-list");
-        return box && box.matches(":popover-open") ? [...box.querySelectorAll(".var-name")].map((x) => x.textContent) : [];
-      };
+      // The list is asked for asynchronously: wait for what it shows (or that it stays shut).
+      const shows = (host, ok, what) => until(() => ok(suggested(host)), `${what}: ${suggested(host)}`);
+      const settled = () => new Promise((r) => setTimeout(r, 150));
+      // The list opens only for the field with the focus: the headers must be on screen.
+      $("req-tabs").value = "headers";
       type(field(1, 0), "Content-Type");
       await tick();
       typeInField(field(1, 1), "json");
-      expect(shown()[0] === "application/json" && shown().includes("application/problem+json"), `json suggests: ${shown()}`);
+      await shows(field(1, 1), (s) => s[0] === "application/json" && s.includes("application/problem+json"), "json suggests");
       press(field(1, 1), "Enter");
-      expect(field(1, 1).value === "application/json" && tab.draft.headers[1].value === "application/json" && !shown().length,
+      expect(field(1, 1).value === "application/json" && tab.draft.headers[1].value === "application/json" && !suggested(field(1, 1)).length,
         `taken: ${field(1, 1).value}`);
       typeInField(field(1, 1), "application/vnd.custom");
+      await settled();
       press(field(1, 1), "Escape");
-      expect(!shown().length && tab.draft.headers[1].value === "application/vnd.custom", "free text stays");
+      expect(!suggested(field(1, 1)).length && tab.draft.headers[1].value === "application/vnd.custom", "free text stays");
+      // ↓ in an empty field shows every value.
+      typeInField(field(1, 1), "");
+      await settled();
+      press(field(1, 1), "ArrowDown");
+      await shows(field(1, 1), (s) => s.length > 10, "↓ shows them all");
+      press(field(1, 1), "Escape");
       type(field(1, 0), "Accept");
       typeInField(field(1, 1), "application/json, te");
-      expect(shown()[0] === "text/plain", `accept piece suggests: ${shown()}`);
+      await shows(field(1, 1), (s) => s[0] === "text/plain", "accept piece suggests");
       press(field(1, 1), "Enter");
       expect(field(1, 1).value === "application/json, text/plain", `accept list: ${field(1, 1).value}`);
       typeInField(field(0, 1), "ye");
-      expect(!shown().length, "an X-Check value has nothing to suggest");
+      await settled();
+      expect(!suggested(field(0, 1)).length, "an X-Check value has nothing to suggest");
       type(field(0, 1), "yes");
       $("headers").querySelectorAll(".kv-row")[1].querySelector("ray-icon-button").click();
       expect(tab.draft.headers.length === 1, "the extra header removed");
@@ -228,11 +243,11 @@ export async function run(port, sampleFile) {
     await tick();
     expect($("layout").collapsed && sidebarWidth() === 0 && getComputedStyle($("tree")).visibility === "hidden",
       `sidebar hidden: ${sidebarWidth()}`);
-    expect(localStorage.getItem("rayreq.sidebar.hidden") === "1" && $("toggle-sidebar").getAttribute("aria-pressed") === "false",
+    expect(localStorage.getItem("ray-split:rayreq.sidebar:collapsed") === "1" && $("toggle-sidebar").getAttribute("aria-pressed") === "false",
       "hiding the sidebar is remembered");
     window.rayreq.menu("toggle-sidebar");
     await tick();
-    expect(!$("layout").collapsed && sidebarWidth() >= 200 && localStorage.getItem("rayreq.sidebar.hidden") === "0", "sidebar shown again");
+    expect(!$("layout").collapsed && sidebarWidth() >= 200 && localStorage.getItem("ray-split:rayreq.sidebar:collapsed") === "0", "sidebar shown again");
 
     // The accent menu: every tone named, the one chosen on the components and remembered, and
     // the dark tones lighter on the dark theme.
@@ -298,6 +313,9 @@ export async function run(port, sampleFile) {
     window.rayreq.menu("palette");
     await until(() => $("palette").open, "the palette opened");
     expect($("palette").actions.some((a) => a.id === `request-${tab.id}`), "palette lists the request");
+    const paletteRoot = $("palette").shadowRoot;
+    expect(paletteRoot.querySelector('[part="hint"]').textContent.includes(t("palette.run")), "the palette's hints in the page's language");
+    expect([...paletteRoot.querySelectorAll(".prefix")].some((p) => p.textContent === tab.draft.method), "the palette shows the method");
     $("palette").hide();
 
     // Variables: the project came with its environment.
@@ -330,23 +348,20 @@ export async function run(port, sampleFile) {
     expect(tab.vars.missing.join() === "nope", `missing: ${JSON.stringify(tab.vars)}`);
     expect(tab.vars.url === `${base}/echo?x=folder&y={{nope}}`, `resolved URL: ${tab.vars.url}`);
     expect($("url-resolved").textContent === tab.vars.url && !$("url-preview").hidden, "the resolved URL is shown");
-    expect(!$("count-missing").hidden, "the missing badge");
+    expect($("req-variables-tab").count === "1", "the missing count");
 
-    // Each {{name}} in a field is tinted by whether it resolves, over the same pixels as its text.
+    // Each {{name}} in a field is tinted by whether it resolves, with its value on hover.
     await frames();
     const urlBox = $("url");
-    const mirror = urlBox.shadowRoot.querySelector(".vars-mirror");
-    const marks = [...mirror.querySelectorAll("mark")].map((m) => `${m.dataset.name}${m.hasAttribute("data-missing") ? "?" : ""}`);
-    expect(marks.join() === "base,x,nope?", `URL marks: ${marks}`);
-    expect(mirror.textContent === urlBox.control.value, `mirror text: ${mirror.textContent}`);
-    const urlFont = getComputedStyle(urlBox.control);
-    const pen = document.createElement("canvas").getContext("2d");
-    pen.font = `${urlFont.fontWeight} ${urlFont.fontSize} ${urlFont.fontFamily}`;
-    const span = document.createRange();
-    span.selectNodeContents(mirror.firstChild);
-    const drawn = span.getBoundingClientRect().width;
-    expect(Math.abs(drawn - pen.measureText(urlBox.control.value).width) < 2, `mirror text width ${drawn} vs ${pen.measureText(urlBox.control.value).width}`);
-    expect(Math.abs(mirror.getBoundingClientRect().left - urlBox.control.getBoundingClientRect().left) < 1, "the mirror sits on the control");
+    const layer = urlBox.shadowRoot.querySelector('[part="text-layer"]');
+    const marks = [...layer.querySelectorAll("mark")].map((m) => `${m.textContent}${m.dataset.kind === "error" ? "?" : ""}`);
+    expect(marks.join() === "{{base}},{{x}},{{nope}}?", `URL marks: ${marks}`);
+    expect(getComputedStyle(layer.querySelector("mark")).backgroundColor !== "rgba(0, 0, 0, 0)", "a resolved name is tinted");
+    {
+      const r = layer.querySelectorAll("mark")[1].getBoundingClientRect();
+      urlBox.control.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left + 2, clientY: r.top + r.height / 2, bubbles: true }));
+      expect(urlBox.control.title.includes("folder"), `the hover says the value: ${urlBox.control.title}`);
+    }
 
     // Typing {{ suggests the variables that reach the request; Enter completes the name, and
     // neither Enter nor Escape reaches the field (no send, no dialog closed).
@@ -359,22 +374,28 @@ export async function run(port, sampleFile) {
       c.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
     };
     const key = (k) => urlBox.control.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, composed: true, cancelable: true }));
+    const offered = () => suggested(urlBox);
+    // The list opens only for the field with the focus (a dialog closing a moment ago leaves the
+    // page inert until it is gone).
+    await until(() => {
+      urlBox.control.focus();
+      return urlBox.shadowRoot.activeElement === urlBox.control;
+    }, "the URL takes the focus");
     typed(`${keep}&z={{`);
-    const list = $("var-suggest");
-    const offered = () => [...list.querySelectorAll(".var-name")].map((n) => n.textContent);
-    expect(list && list.matches(":popover-open"), "the suggestions open after {{");
-    expect(offered().join() === "base,x", `suggested: ${offered()}`);
+    await until(() => offered().join() === "base,x", `the suggestions open after {{: ${offered()}`);
     typed(`${keep}&z={{b`);
-    expect(offered().join() === "base", `filtered: ${offered()}`);
+    await until(() => offered().join() === "base", `filtered: ${offered()}`);
     typed(`${keep}&z={{`);
+    await until(() => offered().length === 2, "all of them again");
     key("ArrowDown");
     key("Enter");
-    expect(!list.matches(":popover-open"), "Enter closes the suggestions");
+    expect(!offered().length, "Enter closes the suggestions");
     expect(urlBox.value === `${keep}&z={{x}}` && tab.draft.url === urlBox.value, `completed: ${urlBox.value} / ${tab.draft.url}`);
     expect(!tab.run, "Enter in the suggestions does not send");
     typed(`${keep}&z={{`);
+    await until(() => offered().length === 2, "the suggestions again");
     key("Escape");
-    expect(!list.matches(":popover-open") && urlBox.value === `${keep}&z={{`, "Escape closes them and leaves the text");
+    expect(!offered().length && urlBox.value === `${keep}&z={{`, "Escape closes them and leaves the text");
     type(urlBox, keep);
     await V.refreshVariables();
 
@@ -484,11 +505,11 @@ export async function run(port, sampleFile) {
 
     // The open requests are WAI-ARIA tabs over one panel: no control inside a tab, Home/End
     // move, Delete closes the focused one and the focus goes to the tab left active.
-    const tabNode = (id) => document.querySelector(`#tabs [data-id="${id}"]`);
+    const tabNode = (id) => document.querySelector(`#tabs ray-doc-tab[value="${id}"]`);
     expect(tabNode(tab2.id).id === `tab-${tab2.id}` && tabNode(tab2.id).getAttribute("aria-controls") === "workspace"
       && $("workspace").getAttribute("role") === "tabpanel" && $("workspace").getAttribute("aria-labelledby") === `tab-${tab2.id}`,
       "tabs and their panel are linked");
-    expect(!$("tabs").querySelector(".tab button, .tab [tabindex]:not(.tab), .tab ray-icon-button"), "a tab holds no focusable control");
+    expect(!$("tabs").querySelector("ray-doc-tab button, ray-doc-tab [tabindex], ray-doc-tab ray-icon-button"), "a tab holds no focusable control");
     const press = (k) => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
     // A modal closing a moment ago (the cURL import) leaves the page inert until it is gone.
     await until(() => {
@@ -576,7 +597,7 @@ export async function run(port, sampleFile) {
     type(path, "X-Echo");
     type(op, "ne", "change");
     type(expected, "{{x}}");
-    expect(tab.draft.assertions.length === 2 && tab.draft.assertions[1].op === "ne" && $("count-assertions").textContent === "2",
+    expect(tab.draft.assertions.length === 2 && tab.draft.assertions[1].op === "ne" && $("req-assertions-tab").count === "2",
       `assertion rows: ${JSON.stringify(tab.draft.assertions)}`);
     fits($("assertions"), "assertions");
     await A.send(tab);
@@ -587,7 +608,7 @@ export async function run(port, sampleFile) {
     await A.send(tab);
     checks = tab.response.assertions || [];
     expect(checks[1].status === "failed" && checks[1].actual === "1" && !$("res-assertions-tab").hidden
-      && $("count-res-assertions").textContent === "1/2"
+      && $("res-assertions-tab").count === "1/2" && $("res-assertions-tab").dataset.color === "red"
       && $("res-assertions").querySelector('[data-status="failed"]'), `a failing assertion: ${JSON.stringify(checks)}`);
     // With captures and tests shown too, the response's tabs fit its pane at the default layout.
     // In both languages (Spanish labels are the longer ones).
@@ -682,7 +703,7 @@ export async function run(port, sampleFile) {
     $("body-type").dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     await until(() => !$("parts").hidden, "the parts editor shows");
     const rowsOf = () => [...$("parts").querySelectorAll(".kv-row")];
-    const typeIn = (row, i, v) => type(row.querySelectorAll("ray-input, rr-mode-input")[i], v);
+    const typeIn = (row, i, v) => type(row.querySelectorAll("ray-input, ray-mode-input")[i], v);
     typeIn(rowsOf()[0], 0, "title");
     typeIn(rowsOf()[0], 1, "Hi {{base}}");
     const fileRow = rowsOf()[1];
@@ -690,7 +711,7 @@ export async function run(port, sampleFile) {
     // The value's own menu says what it is: choosing "File" changes the field, not another cell.
     // (The row is the blank one just added: let it render first.)
     await tick();
-    const valueField = fileRow.querySelector("rr-mode-input");
+    const valueField = fileRow.querySelector("ray-mode-input");
     const trigger = valueField.shadowRoot.querySelector('[part="trigger"]');
     expect(trigger.textContent.trim() === t("parts.text") && valueField.getAttribute("placeholder") === t("kv.value"), `text mode: ${trigger.textContent}`);
     valueField.choose("file");
@@ -698,7 +719,7 @@ export async function run(port, sampleFile) {
     expect(valueField.mode === "file" && trigger.textContent.trim() === t("parts.file") && valueField.getAttribute("placeholder") === t("parts.path"),
       `file mode: ${trigger.textContent} / ${valueField.getAttribute("placeholder")}`);
     expect(valueField.shadowRoot.querySelectorAll("ray-menu-item").length === 2
-      && valueField.shadowRoot.querySelector('ray-menu-item[aria-current="true"]').getAttribute("value") === "file", "the menu marks the current mode");
+      && [...valueField.shadowRoot.querySelectorAll("ray-menu-item[checked]")].map((i) => i.getAttribute("value")).join() === "file", "the menu marks the current mode");
     typeIn(fileRow, 1, sampleFile);
     expect(tab5.draft.method === "GET" && tab5.draft.parts.length === 2 && tab5.draft.parts[1].file, `parts: ${JSON.stringify(tab5.draft.parts)}`);
     $("req-tabs").value = "body";
@@ -708,17 +729,16 @@ export async function run(port, sampleFile) {
     {
       const ctypeField = fileRow.querySelectorAll("ray-input")[1];
       const c = ctypeField.control;
+      c.focus();
       c.value = "pn";
       c.setSelectionRange(2, 2);
       c.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-      const box = document.getElementById("complete-list");
-      const offered = [...box.querySelectorAll(".var-name")].map((x) => x.textContent);
-      expect(box.matches(":popover-open") && offered.includes("image/png"), `part content types: ${offered}`);
+      await until(() => suggested(ctypeField).includes("image/png"), `part content types: ${suggested(ctypeField)}`);
       c.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true, cancelable: true }));
       type(ctypeField, "");
     }
     // A file part shows the end of its path (the file's name) once it is not being edited.
-    const pathField = fileRow.querySelector("rr-mode-input");
+    const pathField = fileRow.querySelector("ray-mode-input");
     pathField.value = `/a/very/long/folder/that/goes/on/and/on/and/on/before/the/name/${"x".repeat(40)}/sample.txt`;
     pathField.dispatchEvent(new Event("focusout", { bubbles: true, composed: true }));
     await frames();

@@ -12,7 +12,7 @@ import { initRunner, openRunner } from "./runner.js";
 import { activeTab, emit, on, state } from "./state.js";
 import { initTabs } from "./tabs.js";
 import { initTree, renderProjects } from "./tree.js";
-import { $, sideScroller } from "./util.js";
+import { $, el } from "./util.js";
 import { initVariables, openCookies, openEnvironments } from "./variables.js";
 
 addEventListener("error", (e) => log(`${e.message} @${e.filename}:${e.lineno}:${e.colno}`));
@@ -55,6 +55,18 @@ function showActive(reload = false) {
 
 // ---- the command palette ---------------------------------------------------------------------
 
+// The method in its tree color. It is drawn inside the palette's shadow root, where the page's
+// .m-* classes do not reach.
+const METHOD_TONES = { GET: "green", POST: "orange", PUT: "blue", PATCH: "violet", DELETE: "red" };
+
+function methodTag(method) {
+  const tone = METHOD_TONES[method] || "gray";
+  return el("span", {
+    text: method,
+    style: `width: 3.25rem; font-family: var(--ray-font-mono); font-size: 10px; font-weight: 700; color: var(--ray-${tone}-light-color)`,
+  });
+}
+
 function paletteActions() {
   const folders = new Map(state.tree.folders.map((f) => [f.id, f]));
   const pathOf = (id) => {
@@ -69,7 +81,8 @@ function paletteActions() {
   const requests = state.tree.requests.map((r) => ({
     id: `request-${r.id}`,
     label: r.name,
-    description: [r.method, pathOf(r.folder_id)].filter(Boolean).join(" · "),
+    prefix: methodTag(r.method),
+    description: pathOf(r.folder_id),
     group: t("palette.requests"),
     keywords: [r.method],
     onSelect: () => A.guard(() => A.openRequest(r.id)),
@@ -119,12 +132,9 @@ function openPalette() {
   p.placeholder = t("palette.placeholder");
   p.emptyLabel = t("palette.empty");
   p.label = t("palette.label");
-  // The hints under the list are fixed English text in the component: say them in the
-  // page's language (each is a <b> key and a text node).
-  const hints = p.shadowRoot.querySelectorAll('[part="hint"] > span');
-  ["palette.navigate", "palette.run", "palette.close"].forEach((key, i) => {
-    if (hints[i] && hints[i].lastChild) hints[i].lastChild.textContent = ` ${t(key)}`;
-  });
+  p.navigateLabel = t("palette.navigate");
+  p.runLabel = t("palette.run");
+  p.closeLabel = t("palette.close");
   p.actions = paletteActions();
   p.show();
 }
@@ -179,10 +189,8 @@ function quietContextMenu() {
 }
 
 // ---- the sidebar ----------------------------------------------------------------------------
-// The start pane of a <ray-split>: its divider resizes it (the width is kept by the split's
-// autosave) and collapsing hides it whole. Whether it is hidden is kept here.
-
-const SIDEBAR_HIDDEN = "rayreq.sidebar.hidden";
+// The start pane of a <ray-split>: its divider resizes it and collapsing hides it whole; the
+// split's autosave keeps both.
 
 function toggleSidebar() {
   const layout = $("layout");
@@ -192,18 +200,11 @@ function toggleSidebar() {
   if (layout.collapsed && inside) $("toggle-sidebar").focus();
 }
 
-function restoreSidebar() {
+/// The toolbar button says whether the sidebar is shown, however it was hidden (the button, the
+/// menu, or the divider: Enter, a double click, a drag).
+function trackSidebar() {
   const layout = $("layout");
-  try {
-    layout.collapsed = localStorage.getItem(SIDEBAR_HIDDEN) === "1";
-  } catch { /* storage unavailable: shown */ }
-  const sync = () => {
-    $("toggle-sidebar").setAttribute("aria-pressed", String(!layout.collapsed));
-    try {
-      localStorage.setItem(SIDEBAR_HIDDEN, layout.collapsed ? "1" : "0");
-    } catch { /* not kept: fine */ }
-  };
-  // Collapsing with the divider (Enter, double click) or dragging it open again.
+  const sync = () => $("toggle-sidebar").setAttribute("aria-pressed", String(!layout.collapsed));
   layout.addEventListener("ray-resize", (e) => {
     if (e.target === layout) sync();
   });
@@ -230,11 +231,6 @@ async function boot() {
   if (state.settings.language !== lang) A.setSetting("language", lang).catch(() => {});
   $("status-version").textContent = `rayreq ${state.version}`;
   $("status-hint").textContent = t("status.hint");
-
-  // Tab bars that do not fit scroll sideways, with a faded edge where tabs are hidden.
-  await customElements.whenDefined("ray-tabs");
-  sideScroller($("tabs"));
-  for (const id of ["req-tabs", "res-tabs"]) sideScroller($(id), $(id).shadowRoot.querySelector('[part="list"]'));
 
   initTree();
   initTabs();
@@ -265,7 +261,7 @@ async function boot() {
     A.guard(() => A.cancel(tab));
   });
   $("toggle-sidebar").addEventListener("click", toggleSidebar);
-  restoreSidebar();
+  trackSidebar();
 
   window.rayreq = {
     menu: runMenu,
