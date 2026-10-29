@@ -13,10 +13,6 @@ import urls;
 
 pub const USER_AGENT: string = "rayreq/0.1.0";
 
-/// Headers net/http always writes itself (lower case); a second one would make the request
-/// invalid (two Host or two Content-Length lines), so they cannot be given.
-const OWN_HEADERS: [string] = ["host", "content-length", "transfer-encoding", "connection"];
-
 /// A request ready to go: the URL parsed and encoded, the enabled headers (plus the defaults)
 /// and the body as bytes.
 pub struct Prepared {
@@ -176,10 +172,6 @@ pub fn prepare(r: model.Request) -> Result<Prepared, string> {
         if (h.value.contains("\r") || h.value.contains("\n")) {
             return Result.Err("the value of header '${name}' contains a line break");
         }
-        if (OWN_HEADERS.contains(name.to_lower())) {
-            // net/http writes its own and would send both: an invalid request.
-            return Result.Err("the client sets '${name}' itself; remove that header");
-        }
         headers.push((name, h.value.trim()));
     }
     var body = match (r.body_type) {
@@ -254,17 +246,22 @@ fn header_pairs(hs: [(string, string)]) -> [(string, string)] {
     out
 }
 
-/// The headers as they go out: the ones net/http writes first by itself (Host, Connection,
-/// Accept-Encoding unless given, Content-Length when there is a body), then ours.
+/// The headers as they go out: the ones net/http writes first (Host and Connection, ours when
+/// given; Accept-Encoding unless given; Content-Length from the body, which must match one given),
+/// then the rest of ours.
 pub fn wire_headers(p: Prepared) -> [(string, string)] {
-    var out: [(string, string)] = [("Host", urls.authority(p.url)), ("Connection", "close")];
-    if (!lower_names(p.headers).contains("accept-encoding")) {
+    let given = header_pairs(p.headers);
+    var out: [(string, string)] = [
+        ("Host", header_value(given, "host").unwrap_or(urls.authority(p.url))),
+        ("Connection", header_value(given, "connection").unwrap_or("close"))
+    ];
+    if (!lower_names(given).contains("accept-encoding")) {
         out.push(("Accept-Encoding", "gzip"));
     }
     if (p.body.len() > 0) {
         out.push(("Content-Length", to_string(p.body.len())));
     }
-    out + header_pairs(p.headers)
+    out + without(given, ["host", "connection", "content-length"])
 }
 
 fn send_once(p: Prepared, timeout_ms: int) -> Result<Reply, string> {
@@ -308,7 +305,7 @@ fn without(hs: [(string, string)], names: [string]) -> [(string, string)] {
 
 /// The request that follows a redirect, as browsers (and Go's net/http) do it: 303 turns
 /// anything but HEAD into a GET without body; 301/302 do the same for a POST; 307/308 repeat
-/// the method and the body. Credentials never cross to another origin.
+/// the method and the body. Credentials, and a Host given by hand, never cross to another origin.
 pub fn follow(p: Prepared, status: int, next: urls.Url) -> Prepared {
     let to_get = (status == 303 && p.method != "HEAD")
         || ((status == 301 || status == 302) && p.method == "POST");
@@ -323,7 +320,7 @@ pub fn follow(p: Prepared, status: int, next: urls.Url) -> Prepared {
     if (urls.origin(next) != urls.origin(p.url)) {
         headers = without(
             headers,
-            ["authorization", "cookie", "proxy-authorization"] + p.credentials
+            ["authorization", "cookie", "proxy-authorization", "host"] + p.credentials
         );
     }
     Prepared {

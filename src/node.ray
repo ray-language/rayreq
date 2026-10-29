@@ -130,12 +130,7 @@ pub fn quote(s: string) -> string {
     json.render_doc(json.Doc.Str(s))
 }
 
-/// JSON text as a tree. `json.parse_doc` does not take a byte order mark (and calls it
-/// "expected a number"): one at the start is skipped, as editors on Windows write it.
+/// JSON text as a tree (a leading byte order mark is accepted; errors say `JSON, line L column C: …`).
 pub fn parse_json(s: string) -> Result<Node, string> {
-    let text = s.strip_prefix("\u{FEFF}").unwrap_or(s);
-    match (json.parse_doc(text)) {
-        Result.Ok(n) => Result.Ok(n),
-        Result.Err(e) => Result.Err("JSON: " + e),
-    }
+    json.parse_doc(s)
 }

@@ -48,22 +48,23 @@ fn a_repeated_key_reads_once_in_its_place_with_the_last_value() {
 
 @test
 fn errors_say_what() {
-    // json.parse_doc gives no line or column (findings #276).
+    // json.parse_doc says where (findings #276).
     for (text, want) in [
         ("{\"a\" 1}", "expected ':'"),
         ("[01]", "invalid number"),
         ("\"abc", "unterminated string"),
         ("{} x", "trailing text"),
+        ("[1,\n 2,]", "line 2 column 4"),
         ("", "unexpected end"),
         ("\"\\q\"", "escape")
     ] {
         match (node.parse_json(text)) {
             Result.Ok(_) => panic("accepted ${text}"),
-            Result.Err(e) => assert_eq_msg(e.starts_with("JSON: ") && e.contains(want), true, e),
+            Result.Err(e) => assert_eq_msg(e.starts_with("JSON, line ") && e.contains(want), true, e),
         }
     }
     assert(node.parse_json("[".repeat(300) + "]".repeat(300)).is_err());
-    // A byte order mark is skipped.
+    // A byte order mark is accepted.
     assert_eq(node.to_json(parsed("\u{FEFF}{\"a\":1}"), 0), `{"a":1}`);
 }
 

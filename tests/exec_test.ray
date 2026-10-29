@@ -157,12 +157,24 @@ fn header_injection_is_refused() {
 }
 
 @test
-fn headers_the_client_writes_cannot_be_given() {
+fn a_given_host_or_connection_replaces_the_clients() {
     var r = req("POST", "http://127.0.0.1:1/");
-    for name in ["Host", "content-length", "Transfer-Encoding", "Connection"] {
-        r.headers = [model.Pair { key: name, value: "x", enabled: true }];
-        assert(exec.prepare(r).is_err());
+    r.body_type = "text";
+    r.body = "hi";
+    r.headers = [
+        model.Pair { key: "host", value: "api.test", enabled: true },
+        model.Pair { key: "Connection", value: "keep-alive", enabled: true }
+    ];
+    let hs = exec.wire_headers(exec.prepare(r).unwrap());
+    assert_eq(hs[0], ("Host", "api.test"));
+    assert_eq(hs[1], ("Connection", "keep-alive"));
+    var hosts = 0;
+    for (k, _v) in hs {
+        if (k.to_lower() == "host") {
+            hosts = hosts + 1;
+        }
     }
+    assert_eq(hosts, 1);
 }
 
 @test

@@ -149,8 +149,9 @@ The database lives in `~/Library/Application Support/RayReq/rayreq.db` (macOS),
 
 - TLS certificate verification cannot be turned off yet (net/http can since 0.12; rayreq has
   no setting for it).
-- `Host`, `Content-Length`, `Connection` and `Transfer-Encoding` cannot be set by hand: net/http
-  writes its own and would send both.
+- `Host` and `Connection` given by hand replace the client's (a given `Host` is dropped on a
+  redirect to another origin); a `Content-Length` that does not match the body, or any
+  `Transfer-Encoding`, is refused by net/http when sending.
 - Repeated `Cookie` headers are joined into one with `; ` (RFC 6265 allows a single one).
 - Response bodies are read whole; the page shows up to 2 MB of text and the history keeps up to
   5 MB per execution.
