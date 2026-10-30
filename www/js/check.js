@@ -383,6 +383,11 @@ export async function run(port, sampleFile) {
     }, "the URL takes the focus");
     typed(`${keep}&z={{`);
     await until(() => offered().join() === "base,x", `the suggestions open after {{: ${offered()}`);
+    // The variable's name is code (mono); where it comes from is prose (the UI font).
+    const piece = (part) => urlBox.shadowRoot.querySelector(`[part="${part}"]`);
+    const nameFont = getComputedStyle(piece("suggestion-label")).fontFamily;
+    const sourceFont = getComputedStyle(piece("suggestion-description")).fontFamily;
+    expect(nameFont !== sourceFont && !/mono/i.test(sourceFont), `suggestion description font: ${sourceFont}`);
     typed(`${keep}&z={{b`);
     await until(() => offered().join() === "base", `filtered: ${offered()}`);
     typed(`${keep}&z={{`);
