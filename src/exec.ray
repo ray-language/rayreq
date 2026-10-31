@@ -11,7 +11,7 @@ import model;
 import multipart;
 import urls;
 
-pub const USER_AGENT: string = "rayreq/0.1.0";
+pub const USER_AGENT: string = "rayreq/0.1.1";
 
 /// A request ready to go: the URL parsed and encoded, the enabled headers (plus the defaults)
 /// and the body as bytes.

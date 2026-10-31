@@ -54,11 +54,12 @@ ray-toaster { bottom: 1.5rem; }
 
 .tree { min-height: 12rem; font-size: var(--ray-font-size-sm); outline: none; }
 /* A folder's chevron + icon and a request's method tag take the same width, so names at one
-   depth start at one x. */
+   depth start at one x. A level is indented by a chevron and its gap: what a folder holds starts
+   under its icon, the method tags in one left-aligned column. */
 .tree { --tree-gap: 6px; --tree-chev: 14px; --tree-icon: 15px; }
 .tree-row {
   display: flex; align-items: center; gap: var(--tree-gap);
-  padding-block: 3px; padding-inline: calc(var(--depth, 0) * 14px + 6px) 6px;
+  padding-block: 3px; padding-inline: calc(var(--depth, 0) * (var(--tree-chev) + var(--tree-gap)) + 6px) 6px;
   border-radius: var(--ray-radius-sm); cursor: default;
   color: var(--ray-foreground); white-space: nowrap;
 }
@@ -74,7 +75,7 @@ ray-toaster { bottom: 1.5rem; }
 
 .method-tag {
   flex: none; width: calc(var(--tree-chev) + var(--tree-gap) + var(--tree-icon)); font-family: var(--ray-font-mono); font-size: 10px; font-weight: 700;
-  text-align: end; letter-spacing: 0.02em;
+  text-align: start; letter-spacing: 0.02em;
 }
 .m-GET { color: var(--ray-green-light-color); }
 .m-POST { color: var(--ray-orange-light-color); }
@@ -296,3 +297,9 @@ table.runner-table td:last-child { font-family: inherit; word-break: normal; }
 }
 /* The inline suggestions at the size of the fields' text. */
 *::part(suggestion) { font-size: var(--ray-font-size-xs); }
+
+/* ---- about (Linux, Windows) ------------------------------------------------------------ */
+
+.about { text-align: center; font-size: var(--ray-font-size-sm); color: var(--ray-muted-foreground); }
+.about-name { font-size: var(--ray-font-size-lg); color: var(--ray-foreground); }
+.about-copyright { font-size: var(--ray-font-size-xs); }

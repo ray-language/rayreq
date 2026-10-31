@@ -59,6 +59,24 @@ fn edit_items() -> [ui.MenuItem] {
     ]
 }
 
+/// The About item, in the application menu: on macOS the system's About panel (filled by
+/// `describe`); on Linux and Windows a menu of its own, whose item reaches the page as the tag
+/// "role:about" and opens the page's About dialog. Before the first window.
+pub fn install_about(name: string, version: string, lang: string) -> Result<int, string> {
+    ui.app_menu(name, [ui.item("role:about", tr(lang, "About ${name}", "Acerca de ${name}"), "")])?;
+    describe(name, version, lang)
+}
+
+/// What the macOS About panel says, in the page's language. No description: the panel shows it
+/// left-aligned in another font, so "made with raylang" goes on the copyright line.
+pub fn describe(name: string, version: string, lang: string) -> Result<int, string> {
+    ui.set_about(name, version, "", tr(lang, COPYRIGHT_EN, COPYRIGHT_ES))
+}
+
+pub const COPYRIGHT_EN: string = "© 2026 Rayala · Made with raylang";
+
+pub const COPYRIGHT_ES: string = "© 2026 Rayala · Hecho con raylang";
+
 pub struct Titles {
     file: string,
     request: string,

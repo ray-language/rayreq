@@ -161,8 +161,15 @@ function runMenu(tag) {
       case "run-folder": return openRunner(A.currentFolder());
       case "copy-curl": return tab && A.copyCurl(tab);
       case "toggle-sidebar": return toggleSidebar();
+      // Linux and Windows: the application menu's About (macOS opens the system's panel).
+      case "role:about": return openAbout();
     }
   });
+}
+
+function openAbout() {
+  document.querySelector("#about-dialog .about-version").textContent = t("about.version", { version: state.version });
+  $("about-dialog").show();
 }
 
 async function changeLanguage(lang) {

@@ -262,6 +262,17 @@
   <ray-button slot="footer" id="folder-auth-save"><span data-i18n="dialog.save"></span></ray-button>
 </ray-dialog>
 
+<!-- About, for Linux and Windows (macOS shows the system's panel). -->
+<ray-dialog id="about-dialog" size="xs" data-i18n-attr="label:about.title">
+  <ray-stack gap="xs" align="center" class="about">
+    <img src="icon.svg" alt="" width="96" height="96">
+    <strong class="about-name">RayReq</strong>
+    <span class="about-version"></span>
+    <span class="about-copyright" data-i18n="about.copyright"></span>
+  </ray-stack>
+  <ray-button slot="footer" data-dialog-close autofocus><span data-i18n="dialog.close"></span></ray-button>
+</ray-dialog>
+
 <ray-dialog id="cookies-dialog" size="xl">
   <p class="note" id="cookies-note"></p>
   <div id="cookies-list"></div>

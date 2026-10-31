@@ -343,7 +343,9 @@ async function restoreTabs() {
   for (const id of saved.open || []) {
     if (!requestOf(id)) continue;
     try {
-      state.tabs.push(makeTab(await call("requests.get", { id })));
+      const tab = makeTab(await call("requests.get", { id }));
+      state.tabs.push(tab);
+      loadLastResponse(tab);
     } catch { /* gone meanwhile */ }
   }
   state.active = tabOf(saved.active) ? saved.active : (state.tabs[0]?.id ?? null);
@@ -353,9 +355,23 @@ async function restoreTabs() {
 export async function openRequest(id, loaded) {
   if (!tabOf(id)) {
     const request = loaded || (await call("requests.get", { id }));
-    state.tabs.push(makeTab(request));
+    const tab = makeTab(request);
+    state.tabs.push(tab);
+    loadLastResponse(tab);
   }
   activate(id);
+}
+
+/// A tab opens on the request's last response, from its history (a send started meanwhile wins).
+async function loadLastResponse(tab) {
+  try {
+    tab.history = await call("history.list", { request_id: tab.id });
+    if (!tab.history.length || tab.response || tab.run) return;
+    const last = await call("history.get", { id: tab.history[0].id });
+    if (tab.response || tab.run) return;
+    tab.response = last;
+    emit("response", tab);
+  } catch { /* no history to show */ }
 }
 
 export function activate(id) {

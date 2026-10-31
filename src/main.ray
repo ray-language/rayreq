@@ -205,6 +205,7 @@ fn run(check: bool) -> Result<int, string> {
     store.end_cookie_session(s)?;
     let native = bridge.system();
     let lang = initial_language(s);
+    menus.install_about(APP_NAME, api.VERSION, lang)?;
     menus.install(native, lang)?;
     // The language the bar is in now.
     var menu_lang = lang;
@@ -313,6 +314,9 @@ fn run(check: bool) -> Result<int, string> {
                         match (menus.relabel(native, menu_lang, l)) {
                             Result.Ok(_) => menu_lang = l,
                             Result.Err(err) => eprint("rayreq: menus: " + err),
+                        }
+                        if let Result.Err(err) = menus.describe(APP_NAME, api.VERSION, l) {
+                            eprint("rayreq: about: " + err);
                         }
                         reply(target, id, api.ok(json.Json.JBool(true)));
                     },

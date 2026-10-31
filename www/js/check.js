@@ -234,6 +234,15 @@ export async function run(port, sampleFile) {
     expect(state.tree.requests.find((x) => x.id === tab.id).folder_id === folder.id, "request moved into the folder");
     expect(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"][aria-expanded="true"]`), "folder row expanded");
     expect(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`).getAttribute("aria-level") === "2", "request nested under it");
+    // A level is indented by a chevron: a folder's requests start under its icon, their method
+    // tags one left-aligned column.
+    {
+      const left = (sel) => document.querySelector(`#tree ${sel}`).getBoundingClientRect().left;
+      const icon = left(`.tree-row[data-kind="folder"][data-id="${folder.id}"] .folder-icon`);
+      const method = left(`.tree-row[data-kind="request"][data-id="${tab.id}"] .method-tag`);
+      expect(Math.abs(icon - method) < 1 && getComputedStyle(document.querySelector("#tree .method-tag")).textAlign === "start",
+        `folder icon at ${icon}, its request's method at ${method}`);
+    }
 
     // The sidebar is a pane: wide enough for the tree, hidden whole (not a rail) and back, and
     // whether it is hidden is remembered.
@@ -789,8 +798,24 @@ export async function run(port, sampleFile) {
     const mpBack = await call("curl.parse", { text: mpCurl.command });
     expect(mpBack.request.body_type === "multipart" && mpBack.request.parts[1].value === sampleFile, `curl back: ${JSON.stringify(mpBack.request.parts)}`);
     await A.save(tab5);
+    const lastSent = tab5.response.history_id;
+    await A.closeTab(tab5.id);
+    // Opened again, a request shows its last response (from the history), not "send it".
+    await A.openRequest(tab5.id);
+    await until(() => activeTab().response && activeTab().response.history_id === lastSent, "the last response is back");
+    await frames();
+    expect(!$("response").hidden && $("res-tabs").value === "body" && $("body-view-area").textContent.includes("multipart/form-data"),
+      "the response pane shows it");
     await A.closeTab(tab5.id);
     A.activate(tab.id);
+
+    // Linux and Windows: the application menu's About opens the page's dialog.
+    window.rayreq.menu("role:about");
+    await until(() => $("about-dialog").open, "the About dialog opened");
+    expect(document.querySelector("#about-dialog .about-version").textContent === t("about.version", { version: state.version }),
+      "About says the version");
+    $("about-dialog").close("");
+    await until(() => !$("about-dialog").open, "the About dialog closed");
 
     // Spanish and back.
     setLanguage("es");

@@ -33,5 +33,6 @@ build: ## Native binary, refusing anything outside the native subset
 bundle-macos: ## RayReq.app
 	ray bundle
 
-icon: ## Render brand/icon.png (the bundle icon) from brand/icon.svg (needs rsvg-convert)
+icon: ## Render brand/icon.png (the bundle icon) from brand/icon.svg (needs rsvg-convert); copy it for the page's About
 	rsvg-convert -w 1024 -h 1024 brand/icon.svg -o brand/icon.png
+	cp brand/icon.svg www/icon.svg
