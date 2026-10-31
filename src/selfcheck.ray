@@ -76,6 +76,19 @@ fn echo(req: webserver.Request) -> webserver.Response {
         let ct = req.headers.get_or("content-type", "");
         return webserver.text(200, ct + "\n\n" + from_utf8(req.body).unwrap_or("<binary>"));
     }
+    if (req.path == "/page") {
+        // A page whose lines are long: wrapped, it is much taller than the pane.
+        var long = "";
+        for i in 0..400 {
+            long = long + "<span class=\"c${i}\">word ${i}</span>";
+        }
+        var r = webserver.text(
+            200,
+            "<!DOCTYPE html>\n<html>\n  <body>\n    ${long}\n    ${long}\n  </body>\n</html>\n"
+        );
+        r.headers.insert("Content-Type", "text/html; charset=utf-8");
+        return r;
+    }
     if (req.path == "/missing") {
         return webserver.text(404, "no such thing");
     }

@@ -413,6 +413,32 @@ export async function run(port, sampleFile) {
     const envVars = await call("environments.variables", { id: state.environments[0].id });
     expect(envVars.some((v) => v.key === "big" && v.value === "12345678901234567890"), "the capture is in the environment");
 
+    // Wrapping a page of long lines makes the body far taller than the pane: it scrolls inside
+    // its panel, and the bars above it (the URL preview, the response's tabs) keep their height.
+    {
+      const sent = tab.draft.url;
+      type($("url"), "{{base}}/page?x={{x}}");
+      await V.refreshVariables();
+      await A.send(tab);
+      expect(tab.response.ok && !$("url-preview").hidden, "the page came, under the resolved URL");
+      $("res-tabs").value = "body";
+      const wrapSwitch = $("wrap");
+      const setWrap = async (on) => {
+        wrapSwitch.checked = on;
+        wrapSwitch.dispatchEvent(new Event("change", { bubbles: true }));
+        await frames();
+      };
+      const heights = () => {
+        const part = (name) => $("res-tabs").shadowRoot.querySelector(`[part="${name}"]`).getBoundingClientRect().height;
+        return [$("url-preview").getBoundingClientRect().height, part("list"), part("panels")].map(Math.round).join();
+      };
+      await setWrap(false);
+      const unwrapped = heights();
+      await setWrap(true);
+      expect(heights() === unwrapped, `heights (URL preview, tabs, panels) ${unwrapped} unwrapped, ${heights()} wrapped`);
+      await setWrap(false);
+      type($("url"), sent);
+    }
     // Another environment: its own `x` wins over the folder's.
     const staging = await call("environments.create", { project_id: p.id, name: "staging", copy_from: state.environments[0].id });
     await call("environments.save_variables", { id: staging.id, variables: [{ key: "base", value: base, enabled: true }, { key: "x", value: "staging", enabled: true }] });
