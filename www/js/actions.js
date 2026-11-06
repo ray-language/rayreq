@@ -175,17 +175,18 @@ export async function newFolder(parentId = currentFolder()) {
   await refreshTree();
 }
 
-export async function rename(node) {
+/// Renames a folder or a request to `name` (typed in place in the tree).
+export async function rename(node, name) {
+  const clean = name.trim();
+  if (!clean) return;
   if (node.kind === "folder") {
     const f = folderOf(node.id);
-    const r = await askName({ title: t("folder.renameTitle"), ok: t("dialog.rename"), name: f.name });
-    if (!r) return;
-    await call("folders.rename", { id: f.id, name: r.name });
+    if (!f || f.name === clean) return;
+    await call("folders.rename", { id: f.id, name: clean });
   } else {
     const req = requestOf(node.id);
-    const r = await askName({ title: t("request.renameTitle"), ok: t("dialog.rename"), name: req.name });
-    if (!r) return;
-    const up = await call("requests.rename", { id: req.id, name: r.name });
+    if (!req || req.name === clean) return;
+    const up = await call("requests.rename", { id: req.id, name: clean });
     // An open tab takes the new name without losing its other edits.
     const tab = tabOf(req.id);
     if (tab) {

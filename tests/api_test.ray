@@ -225,3 +225,28 @@ fn bad_requests_get_an_error_reply() {
     assert(error_of(s, "{\"op\":\"requests.get\",\"id\":42}").contains("not found"));
     assert(error_of(s, "{\"op\":\"tree\"}").contains("project_id"));
 }
+
+@test
+fn several_folders_live_at_the_root_and_one_moves_back_to_it() {
+    let s = fresh();
+    let p = json.get_int(value(s, "{\"op\":\"projects.create\",\"name\":\"P\"}"), "id").unwrap();
+    let a = json.get_int(value(s, "{\"op\":\"folders.create\",\"project_id\":${p},\"parent_id\":0,\"name\":\"A\"}"), "id")
+        .unwrap();
+    value(s, "{\"op\":\"folders.create\",\"project_id\":${p},\"parent_id\":0,\"name\":\"B\"}");
+    let c = json.get_int(value(s, "{\"op\":\"folders.create\",\"project_id\":${p},\"parent_id\":${a},\"name\":\"C\"}"), "id")
+        .unwrap();
+    let t = value(s, "{\"op\":\"tree\",\"project_id\":${p}}");
+    var at_root = 0;
+    for f in json.get_array(t, "folders").unwrap() {
+        if (json.get_int(f, "parent_id").unwrap() == 0) {
+            at_root = at_root + 1;
+        }
+    }
+    assert_eq(at_root, 2);
+    let moved = value(s, "{\"op\":\"folders.move\",\"id\":${c},\"parent_id\":0}");
+    assert_eq(json.get_int(moved, "parent_id").unwrap(), 0);
+    let t2 = value(s, "{\"op\":\"tree\",\"project_id\":${p}}");
+    for f in json.get_array(t2, "folders").unwrap() {
+        assert_eq(json.get_int(f, "parent_id").unwrap(), 0);
+    }
+}

@@ -161,8 +161,7 @@ function runMenu(tag) {
       case "run-folder": return openRunner(A.currentFolder());
       case "copy-curl": return tab && A.copyCurl(tab);
       case "toggle-sidebar": return toggleSidebar();
-      // Linux and Windows: the application menu's About (macOS opens the system's panel).
-      case "role:about": return openAbout();
+      case "about": return openAbout();
     }
   });
 }

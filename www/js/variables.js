@@ -9,6 +9,7 @@ import * as A from "./actions.js";
 import { call } from "./api.js";
 import { formatTime, t } from "./i18n.js";
 import { AuthEditor } from "./auth.js";
+import { askTargets } from "./dialogs.js";
 import { KvEditor } from "./kv.js";
 import { activeTab, emit, folderOf, on, state } from "./state.js";
 import { $, PLACEHOLDER, debounce, el, setCount } from "./util.js";
@@ -102,18 +103,84 @@ export function renderEnvironments() {
 
 let envEditor;
 let envDrafts = new Map(); // environment id → rows being edited (only the touched ones)
+let envRows = new Map(); // environment id → rows as stored (read once per opening)
 let editing = 0; // the environment shown in the dialog
 let pendingName = null; // {mode: "new" | "duplicate" | "rename"} while the name row is open
+
+/// The rows of an environment as the dialog knows them: edited here, else as stored.
+async function envRowsOf(id) {
+  if (envDrafts.has(id)) return envDrafts.get(id);
+  if (!envRows.has(id)) envRows.set(id, await call("environments.variables", { id }));
+  return envRows.get(id);
+}
+
+/// Names defined in `others` (lists of rows) that `rows` lacks, in the order met.
+function missingNames(rows, others) {
+  const have = new Set(rows.map((r) => r.key));
+  const out = [];
+  for (const list of others) {
+    for (const r of list) {
+      if (r.key && !have.has(r.key) && !out.includes(r.key)) out.push(r.key);
+    }
+  }
+  return out;
+}
+
+/// Fills `box` with the names to offer: one button each, and "add all" past one. `add(names)`
+/// puts them in the table.
+function renderSuggest(box, names, add) {
+  box.replaceChildren();
+  box.hidden = names.length === 0;
+  if (!names.length) return;
+  box.append(el("span", { text: t("vars.suggestMissing") }));
+  for (const name of names) {
+    box.append(el("ray-button", { size: "xs", variant: "light", onclick: () => add([name]) }, el("ray-icon", { slot: "left", name: "plus" }), name));
+  }
+  if (names.length > 1) {
+    box.append(el("ray-button", { size: "xs", variant: "subtle", class: "add-all", onclick: () => add(names) }, t("vars.addAll")));
+  }
+}
+
+/// A row copied into other environments' tables (kept with Save, like any edit).
+function copyInto(rows, row) {
+  const i = rows.findIndex((r) => r.key === row.key);
+  const copy = { key: row.key, value: row.value, enabled: row.enabled !== false };
+  return i < 0 ? [...rows, copy] : rows.map((r, j) => (j === i ? copy : r));
+}
+
+/// The names other environments have and this one does not, offered under the table.
+async function suggestEnvNames(id) {
+  const others = await Promise.all(state.environments.filter((e) => e.id !== id).map((e) => envRowsOf(e.id)));
+  if (editing !== id) return;
+  renderSuggest($("env-suggest"), missingNames(envEditor.value, others), (names) => {
+    envEditor.add(names.map((key) => ({ key, value: "", enabled: true })));
+    suggestEnvNames(id);
+  });
+}
+
+async function copyEnvVariable(row) {
+  if (!row.key) return;
+  const options = state.environments.filter((e) => e.id !== editing).map((e) => ({ value: String(e.id), label: e.name }));
+  if (!options.length) {
+    notify({ message: t("vars.copyNowhere"), color: "orange", autoClose: 2000 });
+    return;
+  }
+  const chosen = await askTargets({ title: t("vars.copyTitle", { name: row.key }), options });
+  if (!chosen || !chosen.length) return;
+  for (const id of chosen.map(Number)) envDrafts.set(id, copyInto(await envRowsOf(id), row));
+  notify({ message: t("vars.copied", { n: chosen.length }), color: "green", autoClose: 2500 });
+}
 
 async function showEnvironment(id) {
   editing = id;
   $("env-edit").value = String(id);
-  const rows = envDrafts.get(id) ?? (await call("environments.variables", { id }));
+  const rows = await envRowsOf(id);
   if (editing !== id) return;
   envEditor.set(rows);
   const env = state.environments.find((e) => e.id === id);
   $("env-menu").querySelector('[value="activate"]').disabled = Boolean(env && env.active);
   $("env-menu").querySelector('[value="delete"]').disabled = state.environments.length <= 1;
+  await suggestEnvNames(id);
 }
 
 function fillEnvSelect() {
@@ -189,6 +256,7 @@ async function runEnvMenu(value) {
       if (!yes) return;
       await call("environments.delete", { id: env.id });
       envDrafts.delete(env.id);
+      envRows.delete(env.id);
       await A.loadEnvironments();
       fillEnvSelect();
       const next = state.environments.find((e) => e.active) || state.environments[0];
@@ -218,6 +286,7 @@ export async function openEnvironments() {
   if (!state.project) return;
   await A.loadEnvironments();
   envDrafts = new Map();
+  envRows = new Map();
   closeEnvName();
   fillEnvSelect();
   const active = state.environments.find((e) => e.active) || state.environments[0];
@@ -231,6 +300,7 @@ let folderEditor;
 let folderId = 0;
 let folderScope = 0; // 0 = the defaults; else an environment id
 let folderDrafts = new Map();
+let folderRows = new Map(); // scope → rows as stored (read once per opening)
 
 function folderHelp() {
   if (!folderScope) return t("folder.varsHelpDefault");
@@ -238,27 +308,63 @@ function folderHelp() {
   return t("folder.varsHelpEnv", { name: env ? env.name : "" });
 }
 
+function scopeLabel(scope) {
+  if (!scope) return t("folder.varsDefault");
+  const env = state.environments.find((e) => e.id === scope);
+  return env ? (env.active ? `${env.name} (${t("env.active")})` : env.name) : "";
+}
+
+async function folderRowsOf(scope) {
+  if (folderDrafts.has(scope)) return folderDrafts.get(scope);
+  if (!folderRows.has(scope)) folderRows.set(scope, await call("folders.variables", { id: folderId, environment_id: scope }));
+  return folderRows.get(scope);
+}
+
+/// The names the folder defines for other scopes (the defaults, other environments) and not
+/// for the one shown.
+async function suggestFolderNames(scope) {
+  const scopes = [0, ...state.environments.map((e) => e.id)].filter((x) => x !== scope);
+  const others = await Promise.all(scopes.map(folderRowsOf));
+  if (folderScope !== scope) return;
+  renderSuggest($("folder-suggest"), missingNames(folderEditor.value, others), (names) => {
+    folderEditor.add(names.map((key) => ({ key, value: "", enabled: true })));
+    suggestFolderNames(scope);
+  });
+}
+
+async function copyFolderVariable(row) {
+  if (!row.key) return;
+  const options = [0, ...state.environments.map((e) => e.id)].filter((x) => x !== folderScope)
+    .map((x) => ({ value: String(x), label: scopeLabel(x) }));
+  const chosen = await askTargets({ title: t("vars.copyTitle", { name: row.key }), options });
+  if (!chosen || !chosen.length) return;
+  for (const scope of chosen.map(Number)) folderDrafts.set(scope, copyInto(await folderRowsOf(scope), row));
+  notify({ message: t("vars.copied", { n: chosen.length }), color: "green", autoClose: 2500 });
+}
+
 async function showFolderScope(scope) {
   folderScope = scope;
   $("folder-vars-scope").value = String(scope);
   $("folder-vars-help").textContent = folderHelp();
-  const rows = folderDrafts.get(scope) ?? (await call("folders.variables", { id: folderId, environment_id: scope }));
+  const rows = await folderRowsOf(scope);
   if (folderScope !== scope) return;
   folderEditor.set(rows);
+  await suggestFolderNames(scope);
 }
 
+/// Opens on the active environment's values (the defaults and the other environments are a
+/// choice away).
 export async function openFolderVariables(id) {
   const f = folderOf(id);
   if (!f) return;
   await A.loadEnvironments();
   folderId = id;
   folderDrafts = new Map();
+  folderRows = new Map();
   $("folder-vars-dialog").label = t("folder.varsTitle", { name: f.name });
-  $("folder-vars-scope").data = [
-    { value: "0", label: t("folder.varsDefault") },
-    ...state.environments.map((e) => ({ value: String(e.id), label: e.active ? `${e.name} (${t("env.active")})` : e.name })),
-  ];
-  await showFolderScope(0);
+  $("folder-vars-scope").data = [0, ...state.environments.map((e) => e.id)].map((x) => ({ value: String(x), label: scopeLabel(x) }));
+  const active = state.environments.find((e) => e.active);
+  await showFolderScope(active ? active.id : 0);
   $("folder-vars-dialog").show();
 }
 
@@ -344,6 +450,7 @@ export function initVariables() {
   envEditor = new KvEditor($("env-vars"), {
     keyLabel: "kv.variable",
     onChange: (rows) => { if (editing) envDrafts.set(editing, rows); },
+    rowAction: { label: t("vars.copyTo"), icon: "copy", onClick: (row) => A.guard(() => copyEnvVariable(row)) },
   });
   folderAuth = new AuthEditor($("folder-auth"), {
     forFolder: true,
@@ -358,6 +465,7 @@ export function initVariables() {
   folderEditor = new KvEditor($("folder-vars"), {
     keyLabel: "kv.variable",
     onChange: (rows) => folderDrafts.set(folderScope, rows),
+    rowAction: { label: t("vars.copyTo"), icon: "copy", onClick: (row) => A.guard(() => copyFolderVariable(row)) },
   });
 
   $("environment").addEventListener("change", (e) => A.guard(async () => {

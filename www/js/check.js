@@ -359,7 +359,9 @@ export async function run(port, sampleFile) {
     expect($("url-resolved").textContent === tab.vars.url && !$("url-preview").hidden, "the resolved URL is shown");
     expect($("req-variables-tab").count === "1", "the missing count");
 
-    // Each {{name}} in a field is tinted by whether it resolves, with its value on hover.
+    // Each {{name}} in a field is tinted by whether it resolves; resting the pointer on one opens
+    // a popover with its value and source, or, for a missing one, a field to create it in the
+    // active environment.
     await frames();
     const urlBox = $("url");
     const layer = urlBox.shadowRoot.querySelector('[part="text-layer"]');
@@ -367,9 +369,32 @@ export async function run(port, sampleFile) {
     expect(marks.join() === "{{base}},{{x}},{{nope}}?", `URL marks: ${marks}`);
     expect(getComputedStyle(layer.querySelector("mark")).backgroundColor !== "rgba(0, 0, 0, 0)", "a resolved name is tinted");
     {
-      const r = layer.querySelectorAll("mark")[1].getBoundingClientRect();
-      urlBox.control.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left + 2, clientY: r.top + r.height / 2, bubbles: true }));
-      expect(urlBox.control.title.includes("folder"), `the hover says the value: ${urlBox.control.title}`);
+      const pop = $("var-popover");
+      const body = $("var-popover-body");
+      const hover = (i) => {
+        const r = layer.querySelectorAll("mark")[i].getBoundingClientRect();
+        urlBox.control.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left + 2, clientY: r.top + r.height / 2, bubbles: true, composed: true }));
+      };
+      hover(1);
+      expect(!pop.open, "the popover waits for the pointer to rest");
+      await until(() => pop.open, "the popover opens on hover");
+      expect(body.querySelector(".value")?.textContent === "folder", `the popover says the value: ${body.textContent}`);
+      expect(body.querySelector(".src")?.textContent.includes("Users"), `and the source: ${body.textContent}`);
+      expect(!urlBox.control.title, "no tooltip besides it");
+      hover(2);
+      await until(() => body.querySelector("form"), "a missing name offers to create it");
+      expect(body.querySelector(".name").textContent === "nope", `about the missing name: ${body.textContent}`);
+      type(body.querySelector("ray-input"), "made");
+      body.querySelector("form").requestSubmit();
+      await until(() => !pop.open, "creating closes the popover");
+      await until(() => tab.vars && tab.vars.missing.length === 0, "the created variable resolves");
+      expect(tab.vars.url === `${base}/echo?x=folder&y=made`, `resolved with it: ${tab.vars.url}`);
+      // Back to a missing name for the rest of the check: the environment loses it again.
+      const env = state.environments.find((e) => e.active);
+      const rows = await call("environments.variables", { id: env.id });
+      await call("environments.save_variables", { id: env.id, variables: rows.filter((r) => r.key !== "nope") });
+      emit("variables");
+      await until(() => tab.vars && tab.vars.missing.join() === "nope", "missing again");
     }
 
     // Typing {{ suggests the variables that reach the request; Enter completes the name, and
@@ -809,8 +834,8 @@ export async function run(port, sampleFile) {
     await A.closeTab(tab5.id);
     A.activate(tab.id);
 
-    // Linux and Windows: the application menu's About opens the page's dialog.
-    window.rayreq.menu("role:about");
+    // The application menu's About opens the app's own window.
+    window.rayreq.menu("about");
     await until(() => $("about-dialog").open, "the About dialog opened");
     expect(document.querySelector("#about-dialog .about-version").textContent === t("about.version", { version: state.version }),
       "About says the version");

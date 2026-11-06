@@ -2,7 +2,7 @@
 name = "rayreq"
 version = "0.1.1"
 license = "Apache-2.0"
-raylang = "1.27.86"
+raylang = "1.27.88"
 
 # The page (www/) is plain HTML + ES modules on ray-elements, served by the process over ray://app.
 [native]
@@ -14,6 +14,10 @@ id = "org.raylang.rayreq"
 copyright = "© 2026 Rayala"
 # ray bundle renders the app icon from this PNG; brand/icon.svg is its source (make icon).
 icon = "brand/icon.png"
+# ray bundle signs with this Developer ID (hardened runtime + timestamp) and notarizes through
+# this notarytool keychain profile (xcrun notarytool store-credentials rayala …).
+sign = "Developer ID Application: ROBERTO CARLOS AYALA MENESES (A2CY27N22G)"
+notary = "rayala"
 
 [dependencies]
 elements = "^0.10.0"

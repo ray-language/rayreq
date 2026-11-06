@@ -1,14 +1,18 @@
 // `{{variables}}` in a text field: each one tinted by whether it resolves, its value and source
-// on hover, and suggestions while typing `{{`. Works on a <ray-input> or <ray-textarea>, through
-// their `highlight` (ranges painted behind the text) and `complete` (the inline list).
+// in a popover under the pointer (a missing one can be created there, in the active
+// environment), and suggestions while typing `{{`. Works on a <ray-input> or <ray-textarea>,
+// through their `highlight` (ranges painted behind the text) and `complete` (the inline list).
 //
 // What resolves comes from `scope()`, the program's `variables` answer (docs/VARIABLES.md, R7):
 // a name resolves when it is in its list, the same one the send uses. The page never computes a
 // value.
 
+import { notify } from "@raylang/elements";
+import { call } from "./api.js";
 import { completions } from "./complete.js";
 import { t } from "./i18n.js";
-import { PLACEHOLDER } from "./util.js";
+import { emit, state } from "./state.js";
+import { $, PLACEHOLDER, el } from "./util.js";
 
 const NAME_CHAR = /[A-Za-z0-9_.-]/;
 
@@ -57,24 +61,132 @@ export function refreshFields() {
 }
 
 /// The ranges of `text`'s placeholders: "var" when it resolves (or the program has not answered
-/// yet: nothing is called missing before), "error" when it does not; the title says its value
-/// and where it comes from.
+/// yet: nothing is called missing before), "error" when it does not. Each keeps its name and
+/// what it resolves to, for the popover (no `title`: the popover replaces the tooltip).
 function marks(text, vars) {
   const byKey = new Map((vars ? vars.variables || [] : []).map((v) => [v.key, v]));
   const out = [];
   for (const m of text.matchAll(PLACEHOLDER)) {
     const v = byKey.get(m[1]);
     const missing = vars && !v;
-    out.push({
-      start: m.index,
-      end: m.index + m[0].length,
-      kind: missing ? "error" : "var",
-      title: v
-        ? t("vars.hover", { name: v.key, value: v.value, source: sourceText(v, vars.environment) })
-        : missing ? t("vars.hoverMissing", { name: m[1] }) : "",
-    });
+    out.push({ start: m.index, end: m.index + m[0].length, kind: missing ? "error" : "var", name: m[1], variable: v || null, missing: Boolean(missing) });
   }
   return out;
+}
+
+// ---- the popover under the pointer ----------------------------------------------------------
+
+const SHOW_DELAY = 350;
+const HIDE_DELAY = 250;
+let shown = null; // {host, range} the popover is about
+let showTimer = 0;
+let hideTimer = 0;
+
+function popover() {
+  return $("var-popover");
+}
+
+/// Creates `name` in the active environment with `value` (then every field sees it).
+async function createVariable(name, value) {
+  const env = state.environments.find((e) => e.active);
+  if (!env) return;
+  const rows = await call("environments.variables", { id: env.id });
+  await call("environments.save_variables", { id: env.id, variables: [...rows.filter((r) => r.key !== name), { key: name, value, enabled: true }] });
+  emit("variables");
+  notify({ message: t("vars.created", { name, env: env.name }), color: "green", autoClose: 2000 });
+}
+
+function fillPopover(range, envName) {
+  const body = $("var-popover-body");
+  body.replaceChildren();
+  const v = range.variable;
+  if (v) {
+    body.append(
+      el("span", { class: "name", text: v.key }),
+      el("span", { class: "value", text: v.value === "" ? t("vars.emptyValue") : v.value }),
+      el("span", { class: "src", text: sourceText(v, envName) }),
+    );
+    return;
+  }
+  body.append(el("span", { class: "name missing", text: range.name }), el("span", { class: "src", text: t("vars.hoverMissing", { name: range.name }) }));
+  const env = state.environments.find((e) => e.active);
+  if (!env) return;
+  const value = el("ray-input", { size: "xs", class: "mono", placeholder: t("kv.value"), "aria-label": t("kv.value"), spellcheck: "false", autocapitalize: "off" });
+  const form = el("form", {}, value, el("ray-button", { size: "xs", type: "submit" }, t("vars.createIn", { env: env.name })));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    hidePopover();
+    try {
+      await createVariable(range.name, value.value);
+    } catch (err) {
+      notify({ title: t("error.prefix"), message: String(err.message || err), color: "red" });
+    }
+  });
+  body.append(form);
+}
+
+function hidePopover() {
+  clearTimeout(showTimer);
+  clearTimeout(hideTimer);
+  shown = null;
+  popover().hide();
+}
+
+function scheduleHide() {
+  clearTimeout(showTimer);
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => {
+    // Not while the pointer or the focus (a value being typed) is in the panel.
+    const p = popover();
+    if (p.matches(":hover") || p.matches(":focus-within")) return;
+    hidePopover();
+  }, HIDE_DELAY);
+}
+
+/// Shows what the range under the pointer resolves to, anchored to the pointer's column of the
+/// field (the whole field's height, so the panel sits right under the text).
+function showPopover(host, range, x) {
+  const p = popover();
+  if (shown && shown.host === host && shown.range.start === range.start && shown.range.name === range.name && p.open) return;
+  shown = { host, range };
+  const vars = host.varScope();
+  fillPopover(range, vars ? vars.environment : "");
+  const box = host.control.getBoundingClientRect();
+  p.anchorRect = () => ({ left: x, right: x, top: box.top, bottom: box.bottom, width: 0, height: box.height, x, y: box.top });
+  p.show();
+  p.reposition?.();
+}
+
+/// The hover handling of one field.
+function hoverField(host) {
+  host.addEventListener("pointermove", (e) => {
+    const layer = host._textLayer;
+    const range = layer && host.control ? layer.rangeAt(e.clientX, e.clientY) : null;
+    if (!range || !range.name) {
+      if (shown && shown.host === host) scheduleHide();
+      else clearTimeout(showTimer);
+      return;
+    }
+    clearTimeout(hideTimer);
+    if (shown && shown.host === host && shown.range.start === range.start && popover().open) return;
+    clearTimeout(showTimer);
+    showTimer = setTimeout(() => showPopover(host, range, e.clientX), SHOW_DELAY);
+  });
+  host.addEventListener("pointerleave", () => {
+    clearTimeout(showTimer);
+    if (shown && shown.host === host) scheduleHide();
+  });
+  // Typing moves the text under the panel: it goes, and comes back on the next hover.
+  host.addEventListener("input", () => { if (shown && shown.host === host) hidePopover(); });
+}
+
+let popoverWired = false;
+function wirePopover() {
+  if (popoverWired) return;
+  popoverWired = true;
+  const p = popover();
+  p.addEventListener("pointerleave", () => { if (!p.matches(":focus-within")) scheduleHide(); });
+  p.addEventListener("ray-close", () => { shown = null; });
 }
 
 /// Makes `host` (a <ray-input> or <ray-textarea>) show its variables. `scope()` returns the
@@ -82,6 +194,9 @@ function marks(text, vars) {
 /// environment}), or null while there is none.
 export function varField(host, scope) {
   if (fields.has(host)) return;
+  wirePopover();
+  host.varScope = scope;
+  hoverField(host);
   host.highlight = (text) => {
     host.varSeen ||= host.isConnected;
     return marks(text, scope());

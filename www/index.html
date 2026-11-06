@@ -73,12 +73,14 @@
 
       <section id="workspace" class="workspace" hidden>
         <form id="urlbar" class="urlbar" autocomplete="off">
-          <ray-select id="method" size="sm" class="method" data-i18n-attr="aria-label:request.method"></ray-select>
-          <ray-input id="url" size="sm" class="grow mono" placeholder="https://api.example.com/users" data-i18n-attr="aria-label:request.url" spellcheck="false" autocapitalize="off"></ray-input>
-          <ray-button id="send" type="submit" size="sm" class="send"><span data-i18n="request.send"></span></ray-button>
-          <ray-button id="save" type="button" size="sm" variant="default"><span data-i18n="request.save"></span></ray-button>
+          <ray-select id="method" size="xs" class="method" data-i18n-attr="aria-label:request.method"></ray-select>
+          <ray-input id="url" size="xs" class="grow mono" placeholder="https://api.example.com/users" data-i18n-attr="aria-label:request.url" spellcheck="false" autocapitalize="off"></ray-input>
+          <ray-button id="send" type="submit" size="xs" class="send"><span data-i18n="request.send"></span></ray-button>
+          <ray-tooltip data-i18n-attr="label:request.save">
+            <ray-icon-button id="save" type="button" size="xs" variant="default" label="Save" data-i18n-attr="label:request.save"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg></ray-icon-button>
+          </ray-tooltip>
           <ray-tooltip data-i18n-attr="label:curl.copy">
-            <ray-icon-button id="copy-curl" size="sm" variant="subtle" label="Copy as cURL" data-i18n-attr="label:curl.copy"><ray-icon name="terminal"></ray-icon></ray-icon-button>
+            <ray-icon-button id="copy-curl" size="xs" variant="default" label="Copy as cURL" data-i18n-attr="label:curl.copy"><ray-icon name="terminal"></ray-icon></ray-icon-button>
           </ray-tooltip>
         </form>
         <p id="url-preview" class="url-preview" hidden><span class="label" data-i18n="vars.resolvedUrl"></span> <span id="url-resolved" class="mono"></span></p>
@@ -240,6 +242,7 @@
     </form>
     <p class="note" data-i18n="env.help"></p>
     <div id="env-vars" class="kv"></div>
+    <div id="env-suggest" class="var-suggest" hidden></div>
   </ray-stack>
   <ray-button slot="footer" variant="default" data-dialog-close><span data-i18n="dialog.cancel"></span></ray-button>
   <ray-button slot="footer" id="env-save"><span data-i18n="dialog.save"></span></ray-button>
@@ -250,9 +253,16 @@
     <ray-select id="folder-vars-scope" size="xs" data-i18n-attr="label:folder.varsScope"></ray-select>
     <p class="note" id="folder-vars-help"></p>
     <div id="folder-vars" class="kv"></div>
+    <div id="folder-suggest" class="var-suggest" hidden></div>
   </ray-stack>
   <ray-button slot="footer" variant="default" data-dialog-close><span data-i18n="dialog.cancel"></span></ray-button>
   <ray-button slot="footer" id="folder-vars-save"><span data-i18n="dialog.save"></span></ray-button>
+</ray-dialog>
+
+<ray-dialog id="targets-dialog" size="xs">
+  <ray-stack id="targets-list" gap="xs"></ray-stack>
+  <ray-button slot="footer" variant="default" data-dialog-close><span data-i18n="dialog.cancel"></span></ray-button>
+  <ray-button slot="footer" id="targets-ok"><span data-i18n="dialog.copy"></span></ray-button>
 </ray-dialog>
 
 <ray-dialog id="folder-auth-dialog" size="md">
@@ -262,7 +272,7 @@
   <ray-button slot="footer" id="folder-auth-save"><span data-i18n="dialog.save"></span></ray-button>
 </ray-dialog>
 
-<!-- About, for Linux and Windows (macOS shows the system's panel). -->
+<!-- About: the app's own, on every platform (the application menu's item opens it). -->
 <ray-dialog id="about-dialog" size="xs" data-i18n-attr="label:about.title">
   <ray-stack gap="xs" align="center" class="about">
     <img src="icon.svg" alt="" width="96" height="96">
@@ -321,6 +331,9 @@
   <ray-button slot="footer" variant="default" data-dialog-close><span data-i18n="dialog.close"></span></ray-button>
   <ray-button slot="footer" id="runner-run"><span data-i18n="runner.run"></span></ray-button>
 </ray-dialog>
+
+<!-- What a {{variable}} under the pointer resolves to (varfield.js); a missing one can be created here. -->
+<ray-popover id="var-popover" placement="bottom-start" padding="sm" offset="4"><div id="var-popover-body" class="var-pop"></div></ray-popover>
 
 <ray-command-palette id="palette" native-menus hotkey=""></ray-command-palette>
 <ray-toaster position="bottom-end"></ray-toaster>

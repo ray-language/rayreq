@@ -1,6 +1,7 @@
 // The sidebar: the project selector and the tree of folders and requests (WAI-ARIA tree:
-// arrows move, Left/Right fold, Enter opens, F2 renames, Delete deletes), with drag and drop
-// to move and one native context menu whose items follow the row it was opened on.
+// arrows move, Left/Right fold, Enter opens, F2 renames in place, Delete deletes), with drag
+// and drop to move (onto empty space: to the root) and one native context menu whose items
+// follow the row it was opened on.
 
 import * as A from "./actions.js";
 import { t } from "./i18n.js";
@@ -11,6 +12,7 @@ import { $, el } from "./util.js";
 
 let filter = "";
 let menuTarget = null; // {kind, id} or null (empty area)
+let renaming = null; // {node, input} while a row's name is edited in place
 
 function children(parentId) {
   const folders = state.tree.folders.filter((f) => f.parent_id === parentId).sort((a, b) => a.position - b.position || a.id - b.id);
@@ -101,6 +103,53 @@ function nodeOf(rowEl) {
   return rowEl ? { kind: rowEl.dataset.kind, id: Number(rowEl.dataset.id) } : null;
 }
 
+function rowOf(node) {
+  return $("tree").querySelector(`.tree-row[data-kind="${node.kind}"][data-id="${node.id}"]`);
+}
+
+// ---- renaming in place ---------------------------------------------------------------------
+
+/// Turns a row's name into a field (as editors do): Enter or leaving the field keeps the new
+/// name, Escape drops it. One row at a time.
+export function startRename(node) {
+  if (renaming) return;
+  const r = rowOf(node);
+  if (!r) return;
+  const current = (node.kind === "folder" ? folderOf(node.id) : requestOf(node.id))?.name ?? "";
+  const input = el("ray-input", { size: "xs", class: "rename-input", "aria-label": t("dialog.name"), spellcheck: "false", autocapitalize: "off" });
+  input.value = current;
+  r.draggable = false;
+  r.classList.add("renaming");
+  r.querySelector(".name").replaceWith(input);
+  renaming = { node, input };
+  let done = false;
+  const finish = async (keep) => {
+    if (done) return;
+    done = true;
+    renaming = null;
+    const name = input.value.trim();
+    if (keep && name && name !== current) await A.guard(() => A.rename(node, name));
+    renderTree();
+    rowOf(node)?.focus();
+  };
+  input.addEventListener("keydown", (e) => {
+    // The tree's own keys (arrows, Delete, F2) stay out of the field.
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("focusout", () => finish(true));
+  requestAnimationFrame(() => {
+    input.focus();
+    input.select?.();
+  });
+}
+
 function toggleFolder(id, open) {
   const isOpen = state.expanded.has(id);
   const want = open ?? !isOpen;
@@ -155,7 +204,7 @@ function runMenu(value) {
       case "run": return openRunner(folder);
       case "variables": return openFolderVariables(node.id);
       case "auth": return openFolderAuth(node.id);
-      case "rename": return A.rename(node);
+      case "rename": return startRename(node);
       case "duplicate": return A.duplicate(node.id);
       case "move": return A.askMove(node);
       case "delete": return A.remove(node);
@@ -169,8 +218,16 @@ export function initTree() {
   const tree = $("tree");
 
   tree.addEventListener("click", (e) => {
+    if (e.target.closest(".rename-input")) return;
     const r = e.target.closest(".tree-row");
-    if (!r) return;
+    if (!r) {
+      // Empty space: nothing selected, so what is created next goes to the root.
+      if (state.selected) {
+        state.selected = null;
+        renderTree();
+      }
+      return;
+    }
     const node = nodeOf(r);
     state.selected = node;
     activate(node);
@@ -192,6 +249,7 @@ export function initTree() {
   $("tree-menu").addEventListener("ray-select", (e) => runMenu(e.detail.value));
 
   tree.addEventListener("keydown", (e) => {
+    if (e.target.closest(".rename-input")) return;
     const r = e.target.closest(".tree-row");
     if (!r) return;
     const rows = [...tree.querySelectorAll(".tree-row")];
@@ -222,18 +280,20 @@ export function initTree() {
         }
         break;
       case "Enter": state.selected = node; activate(node); break;
-      case "F2": A.guard(() => A.rename(node)); break;
+      case "F2": startRename(node); break;
       case "Delete": case "Backspace": A.guard(() => A.remove(node)); break;
       default: return;
     }
     e.preventDefault();
   });
 
-  // Drag and drop: onto a folder moves into it; onto empty space, to the root.
+  // Drag and drop: onto a folder moves into it; onto empty space (the whole sidebar body, not
+  // only the rows' column), to the root.
+  const body = tree.closest(".side-body");
   let dragged = null;
   tree.addEventListener("dragstart", (e) => {
     const r = e.target.closest(".tree-row");
-    if (!r) return;
+    if (!r || renaming) return;
     dragged = nodeOf(r);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", r.textContent);
@@ -245,7 +305,7 @@ export function initTree() {
     return n.kind === "folder" ? n.id : requestOf(n.id)?.folder_id || 0;
   };
   const clearMarks = () => tree.querySelectorAll(".drop-target").forEach((x) => x.classList.remove("drop-target"));
-  tree.addEventListener("dragover", (e) => {
+  body.addEventListener("dragover", (e) => {
     if (!dragged) return;
     e.preventDefault();
     clearMarks();
@@ -253,8 +313,8 @@ export function initTree() {
     const r = tree.querySelector(`.tree-row[data-kind="folder"][data-id="${target}"]`);
     r?.classList.add("drop-target");
   });
-  tree.addEventListener("dragleave", clearMarks);
-  tree.addEventListener("drop", (e) => {
+  body.addEventListener("dragleave", clearMarks);
+  body.addEventListener("drop", (e) => {
     if (!dragged) return;
     e.preventDefault();
     clearMarks();
@@ -286,8 +346,10 @@ export function initTree() {
       if (e.detail.value === "delete") return A.deleteProject();
     });
   });
+  // The foot's buttons: a request where one is working (the selected folder), a folder at the
+  // root (the context menu's "New folder here" makes a subfolder).
   $("new-request").addEventListener("click", () => A.guard(() => A.newRequest()));
-  $("new-folder").addEventListener("click", () => A.guard(() => A.newFolder()));
+  $("new-folder").addEventListener("click", () => A.guard(() => A.newFolder(0)));
 
   on("tree", renderTree);
   on("tabs", renderTree);

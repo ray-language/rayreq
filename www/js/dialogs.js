@@ -2,7 +2,7 @@
 // confirmDialog(), which the bridge turns into the system's dialog.
 
 import { getHost, hostCan } from "@raylang/elements";
-import { $ } from "./util.js";
+import { $, el } from "./util.js";
 import { t } from "./i18n.js";
 
 /// Asks for a name (and a description when withDescription); resolves to {name, description}
@@ -76,6 +76,34 @@ export function askDestination({ title, options, value }) {
     };
     const submit = () => {
       finish(select.value);
+      dialog.close("ok");
+    };
+    const onClose = () => finish(null);
+    okButton.addEventListener("click", submit);
+    dialog.addEventListener("ray-close", onClose);
+    dialog.show();
+  });
+}
+
+/// Asks which of `options` ([{value, label}]) something applies to: resolves to the chosen
+/// values (an array, maybe empty) or null when cancelled.
+export function askTargets({ title, options }) {
+  const dialog = $("targets-dialog");
+  const list = $("targets-list");
+  const okButton = $("targets-ok");
+  dialog.label = title;
+  list.replaceChildren(...options.map((o) => el("ray-checkbox", { size: "sm", value: o.value, label: o.label })));
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      okButton.removeEventListener("click", submit);
+      dialog.removeEventListener("ray-close", onClose);
+      resolve(v);
+    };
+    const submit = () => {
+      finish([...list.querySelectorAll("ray-checkbox")].filter((c) => c.checked).map((c) => c.value));
       dialog.close("ok");
     };
     const onClose = () => finish(null);

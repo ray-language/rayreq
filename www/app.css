@@ -116,9 +116,11 @@ ray-menu-item:not([data-current]) .accent-check { visibility: hidden; }
 /* ---- workspace ------------------------------------------------------------------------- */
 
 .workspace { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-.urlbar { display: flex; gap: var(--ray-space-xs); align-items: center; padding: var(--ray-space-sm); border-block-end: 1px solid var(--ray-border); }
-.urlbar .method { width: 7.5rem; flex: none; }
-.urlbar .send { flex: none; min-width: 5.5rem; }
+/* The URL bar: one xs line, the actions beside it as icons (send keeps its word). */
+.urlbar { display: flex; gap: var(--ray-space-xs); align-items: center; padding: var(--ray-space-xs) var(--ray-space-sm); border-block-end: 1px solid var(--ray-border); }
+.urlbar .method { width: 6.5rem; flex: none; }
+.urlbar .send { flex: none; min-width: 4.5rem; }
+.urlbar ray-icon-button > svg { width: 1em; height: 1em; }
 /* What fills a column grows from 0, not from its content's height: a tall body (a wrapped
    response) would otherwise squeeze the bars above it (the URL preview, a tab strip). */
 .panes { flex: 1 1 0; min-height: 0; }
@@ -132,6 +134,7 @@ ray-menu-item:not([data-current]) .accent-check { visibility: hidden; }
 .kv-row.off ray-input, .kv-row.off ray-mode-input { opacity: 0.55; }
 .kv { container-type: inline-size; }
 .kv-row > ray-input, .kv-row > ray-select { min-width: 0; }
+.kv-row.with-action { grid-template-columns: 1fr 1.4fr auto auto auto; }
 /* Narrower than its xs square, so the row's checkbox and × read as one pair of controls. */
 .kv-row > ray-icon-button { width: 1.5rem; }
 
@@ -221,6 +224,10 @@ table.kv-table td.row-action > ray-icon-button { width: 1.5rem; }
 .hops { margin: 0 0 var(--ray-space-sm); padding: 0; list-style: none; font-size: var(--ray-font-size-xs); }
 .hops li { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); padding-block: 2px; }
 .tree-row .dirty-dot { color: var(--ray-primary); flex: none; font-size: var(--ray-font-size-md); line-height: 1; }
+/* A name being renamed in place: the field takes the name's place, at the row's height. */
+.tree-row.renaming { padding-block: 0; background: none; }
+.tree-row .rename-input { flex: 1 1 auto; min-width: 0; }
+.tree-row .rename-input::part(input) { font-size: var(--ray-font-size-sm); }
 
 /* ---- variables ----------------------------------------------------------------------------- */
 
@@ -240,6 +247,18 @@ table.vars-table td.src { font-family: inherit; word-break: normal; color: var(-
 .env-head { flex-wrap: nowrap; align-items: end; }
 .inline-name { display: flex; gap: var(--ray-space-xs); align-items: center; }
 #env-vars, #folder-vars { max-height: 50vh; overflow: auto; }
+/* Names defined in other environments but not in the one shown: one click adds each. */
+.var-suggest { display: flex; flex-wrap: wrap; gap: var(--ray-space-1); align-items: center; font-size: var(--ray-font-size-xs); color: var(--ray-muted-foreground); }
+.var-suggest ray-button { font-family: var(--ray-font-mono); }
+.var-suggest .add-all { font-family: inherit; margin-inline-start: var(--ray-space-1); }
+/* What a {{variable}} under the pointer resolves to: its name, the value, where it comes from. */
+.var-pop { display: grid; gap: var(--ray-space-1); font-size: var(--ray-font-size-xs); max-width: 24rem; }
+.var-pop .name { font-family: var(--ray-font-mono); font-weight: var(--ray-font-weight-medium); color: var(--ray-foreground); }
+.var-pop .name.missing { color: var(--ray-orange-light-color); }
+.var-pop .value { font-family: var(--ray-font-mono); word-break: break-all; -webkit-user-select: text; user-select: text; }
+.var-pop .src { color: var(--ray-muted-foreground); }
+.var-pop form { display: flex; gap: var(--ray-space-xs); align-items: center; margin-block-start: var(--ray-space-1); }
+.var-pop form ray-input { width: 14rem; }
 .capture-row { display: flex; gap: var(--ray-space-2); align-items: center; padding: var(--ray-space-1) 0; font-size: var(--ray-font-size-sm); }
 /* Test results: the badges share a width, so the descriptions start in one column; what the user
    typed is code, the words around it are text. */
@@ -298,7 +317,7 @@ table.runner-table td:last-child { font-family: inherit; word-break: normal; }
 /* The inline suggestions at the size of the fields' text. */
 *::part(suggestion) { font-size: var(--ray-font-size-xs); }
 
-/* ---- about (Linux, Windows) ------------------------------------------------------------ */
+/* ---- about ----------------------------------------------------------------------------- */
 
 .about { text-align: center; font-size: var(--ray-font-size-sm); color: var(--ray-muted-foreground); }
 .about-name { font-size: var(--ray-font-size-lg); color: var(--ray-foreground); }

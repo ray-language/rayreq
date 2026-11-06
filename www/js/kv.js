@@ -14,13 +14,15 @@ export class KvEditor {
   /// "kv.variable"; "kv.value", "kv.path"). `variables`, when given, is the scope whose
   /// `{{variables}}` the keys and values show (varfield.js). `valueCompletions(row)`, when
   /// given, is what to suggest for a row's value (complete.js; null for nothing).
-  constructor(container, { keyLabel = "kv.key", valueLabel = "kv.value", onChange = () => {}, variables = null, valueCompletions = null } = {}) {
+  /// `rowAction` ({label, icon, onClick(row)}), when given, is one more button per row.
+  constructor(container, { keyLabel = "kv.key", valueLabel = "kv.value", onChange = () => {}, variables = null, valueCompletions = null, rowAction = null } = {}) {
     this.container = container;
     this.keyLabel = keyLabel;
     this.valueLabel = valueLabel;
     this.onChange = onChange;
     this.variables = variables;
     this.valueCompletions = valueCompletions;
+    this.rowAction = rowAction;
     this.rows = [];
     this.render();
   }
@@ -55,6 +57,13 @@ export class KvEditor {
     this.onChange(this.value);
   }
 
+  /// Adds rows (after the real ones, before the blank one) and reports the change.
+  add(rows) {
+    this.rows = [...this.value, ...rows.map((r) => ({ key: r.key, value: r.value, enabled: r.enabled !== false }))];
+    this.render();
+    this.changed();
+  }
+
   /// The field for a row's value (a subclass may offer another kind of field).
   valueElement() {
     return el("ray-input", { size: "xs", placeholder: t(this.valueLabel), "aria-label": t(this.valueLabel), spellcheck: "false", autocapitalize: "off" });
@@ -69,14 +78,18 @@ export class KvEditor {
     const value = this.valueElement(row);
     value.value = row.value;
     const remove = el("ray-icon-button", { size: "xs", variant: "subtle", color: "gray", label: t("kv.remove") }, el("ray-icon", { name: "close" }));
+    const action = this.rowAction
+      ? el("ray-icon-button", { size: "xs", variant: "subtle", color: "gray", label: this.rowAction.label }, el("ray-icon", { name: this.rowAction.icon }))
+      : null;
+    action?.addEventListener("click", () => this.rowAction.onClick({ ...row }));
+    const own = action ? [action, box, remove] : [box, remove];
 
     let blank = isBlank;
     const touch = () => {
       // The first keystroke in the blank row makes it a real one and adds a new blank.
       if (blank && (row.key !== "" || row.value !== "")) {
         blank = false;
-        remove.style.visibility = "";
-        box.style.visibility = "";
+        for (const x of own) x.style.visibility = "";
         this.addBlank();
       }
       this.changed();
@@ -100,11 +113,9 @@ export class KvEditor {
       });
     }
     // The blank row keeps its grid cells (visibility, not hidden) so the columns line up.
-    if (isBlank) {
-      remove.style.visibility = "hidden";
-      box.style.visibility = "hidden";
-    }
-    line.append(key, value, box, remove);
+    if (isBlank) for (const x of own) x.style.visibility = "hidden";
+    if (action) line.classList.add("with-action");
+    line.append(key, value, ...own);
     if (this.variables) for (const input of [key, value]) varField(input, this.variables);
     if (this.valueCompletions) completeField(value, () => this.valueCompletions(row));
     return line;
