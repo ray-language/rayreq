@@ -166,6 +166,12 @@ function runMenu(tag) {
   });
 }
 
+/// The key hints of the status bar: the strings say ⌘, which is Ctrl on Linux and Windows.
+function statusHint() {
+  const mac = /Mac/.test(navigator.platform);
+  return mac ? t("status.hint") : t("status.hint").replaceAll("⌘", "Ctrl+");
+}
+
 function openAbout() {
   document.querySelector("#about-dialog .about-version").textContent = t("about.version", { version: state.version });
   $("about-dialog").show();
@@ -178,7 +184,7 @@ async function changeLanguage(lang) {
   showActive(true);
   emit("tree");
   emit("tabs");
-  $("status-hint").textContent = t("status.hint");
+  $("status-hint").textContent = statusHint();
   await A.setSetting("language", lang);
 }
 
@@ -236,7 +242,7 @@ async function boot() {
   $("language").value = lang;
   if (state.settings.language !== lang) A.setSetting("language", lang).catch(() => {});
   $("status-version").textContent = `rayreq ${state.version}`;
-  $("status-hint").textContent = t("status.hint");
+  $("status-hint").textContent = statusHint();
 
   initTree();
   initTabs();
