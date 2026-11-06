@@ -7,3 +7,5 @@ RayReq.app/
 # `ray dev --device` pairing link (port + secret token)
 .ray-dev
 .DS_Store
+# `ray release` output (zip, update.json, signature)
+dist/

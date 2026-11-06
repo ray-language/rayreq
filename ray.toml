@@ -9,6 +9,7 @@ raylang = "1.27.88"
 embed = ["www"]
 
 [app]
+public_key = "387c0da574710c40a7a3715fd7245980c695550249985529a7e08e4c12e80718"
 name = "RayReq"
 id = "org.raylang.rayreq"
 copyright = "© 2026 Rayala"
