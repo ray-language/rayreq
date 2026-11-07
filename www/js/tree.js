@@ -246,6 +246,12 @@ export function initTree() {
     fillMenu(menuTarget);
   });
   $("tree-menu").addEventListener("ray-select", (e) => runMenu(e.detail.value));
+  // A press anywhere in the tree closes the open menu: ray-menu's light dismiss leaves presses
+  // on its trigger alone, and for a context menu the trigger is the whole tree (finding #314).
+  tree.addEventListener("pointerdown", () => {
+    const menu = $("tree-menu");
+    if (menu.open) menu.open = false;
+  }, true);
 
   tree.addEventListener("keydown", (e) => {
     if (e.target.closest(".rename-input")) return;

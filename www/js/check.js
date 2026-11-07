@@ -312,6 +312,16 @@ export async function run(port, sampleFile) {
     };
     await rightClick(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`));
     await rightClick(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"]`));
+    // A press on the tree itself closes it too (the trigger of a context menu is the whole tree).
+    {
+      const opened = settled("ray-open");
+      document.querySelector("#tree .tree-row").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true }));
+      await opened;
+      const closed = settled("ray-close");
+      document.querySelector("#tree .tree-row").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
+      await closed;
+      expect(!menu.open, "a press on the tree closed its menu");
+    }
     expect(read.length === 2 && read[0].includes("duplicate") && !read[0].includes("new-request"), `request menu: ${read[0]}`);
     expect(read[1].includes("new-request") && !read[1].includes("duplicate"), `folder menu: ${read[1]}`);
     // A right click selects no text in the app's chrome (WebKit reads only the prefixed
