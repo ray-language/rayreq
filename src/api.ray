@@ -66,7 +66,7 @@ import urls;
 import vars;
 import view;
 
-pub const VERSION: string = "0.1.4";
+pub const VERSION: string = "0.1.5";
 
 /// The settings the page may write. `tabs.<project id>` keeps the open tabs of a project;
 /// `block_unresolved` = "1" refuses to send a request with an unresolved `{{name}}`;
