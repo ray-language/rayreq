@@ -150,6 +150,16 @@ fn not_a_usable_command() {
 
 // ---- export --------------------------------------------------------------------------------
 
+/// Whether a real `bash` (and `curl`) answer on this machine. On a Windows without one (a
+/// GitHub runner, a plain VM) `bash` is the WSL stub, which prints "Windows Subsystem for Linux
+/// has no installed distributions" in UTF-16 and fails: the tests that need them are skipped.
+fn real_bash() -> bool {
+    match (process.run("bash", ["-c", "command -v curl >/dev/null && printf ok"])) {
+        Result.Ok(o) => o.exit == process.Exit.Code(0) && from_utf8(o.stdout).unwrap_or("") == "ok",
+        Result.Err(_) => false,
+    }
+}
+
 /// What bash makes of `word`: the text printf gets.
 fn through_bash(word: string) -> string {
     let out = process.run("bash", ["-c", "printf %s " + word]).unwrap();
@@ -158,6 +168,10 @@ fn through_bash(word: string) -> string {
 
 @test
 fn quoting_survives_a_real_bash() {
+    if (!real_bash()) {
+        print("skipped: no bash");
+        return;
+    }
     for s in ["plain", "it's", "a b\tc\nd", "$HOME `x` \\ \" ' ''", "ñandú {{x}}", ""] {
         assert_eq(through_bash(curl.quote(s)), s);
         assert_eq(curl.tokenize("x " + curl.quote(s)).unwrap(), ["x", s]);

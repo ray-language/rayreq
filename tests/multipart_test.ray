@@ -261,8 +261,22 @@ fn start() -> int {
     port
 }
 
+/// Whether a real `bash` (and `curl`) answer on this machine. On a Windows without one (a
+/// GitHub runner, a plain VM) `bash` is the WSL stub, which prints "Windows Subsystem for Linux
+/// has no installed distributions" in UTF-16 and fails: the tests that need them are skipped.
+fn real_bash() -> bool {
+    match (process.run("bash", ["-c", "command -v curl >/dev/null && printf ok"])) {
+        Result.Ok(o) => o.exit == process.Exit.Code(0) && from_utf8(o.stdout).unwrap_or("") == "ok",
+        Result.Err(_) => false,
+    }
+}
+
 @test
 fn rayreq_and_curl_send_the_same_parts() {
+    if (!real_bash()) {
+        print("skipped: no bash or curl");
+        return;
+    }
     let port = start();
     let path = temp_file("it's a \"file\".txt", "file body ñ");
     var typed = text_part("json", "{\"x\": \"y;z\"}");
