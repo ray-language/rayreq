@@ -101,11 +101,14 @@ function fillPopover(range, envName) {
   body.replaceChildren();
   const v = range.variable;
   if (v) {
-    body.append(
-      el("span", { class: "name", text: v.key }),
-      el("span", { class: "value", text: v.value === "" ? t("vars.emptyValue") : v.value }),
-      el("span", { class: "src", text: sourceText(v, envName) }),
-    );
+    const facts = el("dl", { class: "facts" },
+      el("dt", { text: t("kv.value") }),
+      el("dd", { class: "value", text: v.value === "" ? t("vars.emptyValue") : v.value }),
+      el("dt", { text: t("vars.source") }),
+      el("dd", { class: "src", text: v.kind === "environment" ? t("vars.kind.environment", { name: v.source }) : t("vars.kind.folder", { name: v.source }) }));
+    // A folder's value for one environment: that environment is a fact of its own.
+    if (v.kind === "folder_override") facts.append(el("dt", { text: t("env.label") }), el("dd", { class: "env", text: envName }));
+    body.append(el("span", { class: "name", text: v.key }), facts);
     return;
   }
   body.append(el("span", { class: "name missing", text: range.name }), el("span", { class: "src", text: t("vars.hoverMissing", { name: range.name }) }));

@@ -20,8 +20,8 @@
         <ray-select id="environment" size="xs" data-i18n-attr="aria-label:env.label,placeholder:env.label"></ray-select>
         <ray-menu id="env-tools" placement="bottom-end">
           <ray-icon-button slot="trigger" id="manage-envs" size="xs" variant="subtle" label="Environments and cookies" data-i18n-attr="label:env.tools"><ray-icon name="settings"></ray-icon></ray-icon-button>
-          <ray-menu-item value="environments"><span data-i18n="env.manage"></span></ray-menu-item>
-          <ray-menu-item value="cookies"><span data-i18n="cookies.manage"></span></ray-menu-item>
+          <ray-menu-item value="environments"><ray-icon slot="left" name="monitor"></ray-icon><span data-i18n="env.manage"></span></ray-menu-item>
+          <ray-menu-item value="cookies"><ray-icon slot="left" name="cookie"></ray-icon><span data-i18n="cookies.manage"></span></ray-menu-item>
         </ray-menu>
       </ray-group>
       <ray-select id="language" size="xs" data-i18n-attr="aria-label:settings.language">
@@ -43,9 +43,9 @@
           <ray-menu id="project-menu" placement="bottom-end">
             <ray-icon-button slot="trigger" size="xs" variant="subtle" label="Project actions" data-i18n-attr="label:project.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
             <ray-menu-item value="new"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="project.new"></span></ray-menu-item>
-            <ray-menu-item value="edit" data-needs-project><span data-i18n="project.edit"></span></ray-menu-item>
+            <ray-menu-item value="edit" data-needs-project><ray-icon slot="left" name="pencil"></ray-icon><span data-i18n="project.edit"></span></ray-menu-item>
             <ray-menu-divider></ray-menu-divider>
-            <ray-menu-item value="delete" color="red" data-needs-project><span data-i18n="project.delete"></span></ray-menu-item>
+            <ray-menu-item value="delete" color="red" data-needs-project><ray-icon slot="left" name="trash"></ray-icon><span data-i18n="project.delete"></span></ray-menu-item>
           </ray-menu>
         </ray-group>
         <ray-search id="filter" size="xs" variant="default" data-needs-project debounce="80" data-i18n-attr="placeholder:tree.filter,aria-label:tree.filter"></ray-search>
@@ -227,13 +227,13 @@
       <ray-select id="env-edit" size="xs" class="grow" data-i18n-attr="label:env.editing"></ray-select>
       <ray-menu id="env-menu" placement="bottom-end">
         <ray-icon-button slot="trigger" size="xs" variant="default" label="Environment actions" data-i18n-attr="label:env.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
-        <ray-menu-item value="activate"><span data-i18n="env.activate"></span></ray-menu-item>
+        <ray-menu-item value="activate"><ray-icon slot="left" name="check"></ray-icon><span data-i18n="env.activate"></span></ray-menu-item>
         <ray-menu-divider></ray-menu-divider>
         <ray-menu-item value="new"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="env.new"></span></ray-menu-item>
-        <ray-menu-item value="duplicate"><span data-i18n="env.duplicate"></span></ray-menu-item>
-        <ray-menu-item value="rename"><span data-i18n="env.rename"></span></ray-menu-item>
+        <ray-menu-item value="duplicate"><ray-icon slot="left" name="copy"></ray-icon><span data-i18n="env.duplicate"></span></ray-menu-item>
+        <ray-menu-item value="rename"><ray-icon slot="left" name="pencil"></ray-icon><span data-i18n="env.rename"></span></ray-menu-item>
         <ray-menu-divider></ray-menu-divider>
-        <ray-menu-item value="delete" color="red"><span data-i18n="env.delete"></span></ray-menu-item>
+        <ray-menu-item value="delete" color="red"><ray-icon slot="left" name="trash"></ray-icon><span data-i18n="env.delete"></span></ray-menu-item>
       </ray-menu>
     </ray-group>
     <form id="env-name-row" class="inline-name" hidden>
@@ -281,7 +281,6 @@
     <span class="about-version"></span>
     <span class="about-copyright" data-i18n="about.copyright"></span>
   </ray-stack>
-  <ray-button slot="footer" data-dialog-close autofocus><span data-i18n="dialog.close"></span></ray-button>
 </ray-dialog>
 
 <!-- A newer release: offered by the startup check or by Check for Updates. Installing downloads

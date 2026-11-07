@@ -225,8 +225,9 @@ table.kv-table td.row-action > ray-icon-button { width: 1.5rem; }
 .hops li { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); padding-block: 2px; }
 .tree-row .dirty-dot { color: var(--ray-primary); flex: none; font-size: var(--ray-font-size-md); line-height: 1; }
 /* A name being renamed in place: the field takes the name's place, at the row's height. */
+/* The field takes exactly the row's height, so the rows around it stay where they were. */
 .tree-row.renaming { padding-block: 0; background: none; }
-.tree-row .rename-input { flex: 1 1 auto; min-width: 0; }
+.tree-row .rename-input { flex: 1 1 auto; min-width: 0; --_h: calc(var(--ray-font-size-sm) * 1.5 + 6px); }
 .tree-row .rename-input::part(input) { font-size: var(--ray-font-size-sm); }
 
 /* ---- variables ----------------------------------------------------------------------------- */
@@ -248,17 +249,24 @@ table.vars-table td.src { font-family: inherit; word-break: normal; color: var(-
 .inline-name { display: flex; gap: var(--ray-space-xs); align-items: center; }
 #env-vars, #folder-vars { max-height: 50vh; overflow: auto; }
 /* Names defined in other environments but not in the one shown: one click adds each. */
-.var-suggest { display: flex; flex-wrap: wrap; gap: var(--ray-space-1); align-items: center; font-size: var(--ray-font-size-xs); color: var(--ray-muted-foreground); }
-.var-suggest ray-button { font-family: var(--ray-font-mono); }
-.var-suggest .add-all { font-family: inherit; margin-inline-start: var(--ray-space-1); }
+/* Names defined elsewhere: the line that says so, then the chips in a wrapping row. */
+.var-suggest { display: grid; gap: var(--ray-space-xs); font-size: var(--ray-font-size-xs); color: var(--ray-muted-foreground); }
+.var-suggest .chips { display: flex; flex-wrap: wrap; gap: var(--ray-space-1); align-items: center; }
+.var-suggest .chips ray-button { font-family: var(--ray-font-mono); }
+.var-suggest .add-all { font-family: inherit; }
 /* What a {{variable}} under the pointer resolves to: its name, the value, where it comes from. */
-.var-pop { display: grid; gap: var(--ray-space-1); font-size: var(--ray-font-size-xs); max-width: 24rem; }
-.var-pop .name { font-family: var(--ray-font-mono); font-weight: var(--ray-font-weight-medium); color: var(--ray-foreground); }
+.var-pop { display: grid; gap: var(--ray-space-1); font-size: var(--ray-font-size-xs); max-width: 26rem; }
+.var-pop .name { font-family: var(--ray-font-mono); font-weight: var(--ray-font-weight-medium); color: var(--ray-foreground); font-size: var(--ray-font-size-sm); }
 .var-pop .name.missing { color: var(--ray-orange-light-color); }
+/* One labelled row per fact (value, where it comes from, the environment), the labels in a column. */
+.var-pop .facts { display: grid; grid-template-columns: auto 1fr; column-gap: var(--ray-space-sm); row-gap: 2px; align-items: baseline; }
+.var-pop .facts dt { margin: 0; color: var(--ray-muted-foreground); }
+.var-pop .facts dd { margin: 0; color: var(--ray-foreground); min-width: 0; }
 .var-pop .value { font-family: var(--ray-font-mono); word-break: break-all; -webkit-user-select: text; user-select: text; }
 .var-pop .src { color: var(--ray-muted-foreground); }
-.var-pop form { display: flex; gap: var(--ray-space-xs); align-items: center; margin-block-start: var(--ray-space-1); }
-.var-pop form ray-input { width: 14rem; }
+.var-pop form { display: flex; flex-wrap: wrap; gap: var(--ray-space-xs); align-items: center; margin-block-start: var(--ray-space-1); }
+.var-pop form ray-input { flex: 1 1 10rem; min-width: 0; }
+.var-pop form ray-button { flex: none; }
 .capture-row { display: flex; gap: var(--ray-space-2); align-items: center; padding: var(--ray-space-1) 0; font-size: var(--ray-font-size-sm); }
 /* Test results: the badges share a width, so the descriptions start in one column; what the user
    typed is code, the words around it are text. */

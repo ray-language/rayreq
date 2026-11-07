@@ -14,13 +14,15 @@ export class KvEditor {
   /// "kv.variable"; "kv.value", "kv.path"). `variables`, when given, is the scope whose
   /// `{{variables}}` the keys and values show (varfield.js). `valueCompletions(row)`, when
   /// given, is what to suggest for a row's value (complete.js; null for nothing).
-  /// `rowAction` ({label, icon, onClick(row)}), when given, is one more button per row.
-  constructor(container, { keyLabel = "kv.key", valueLabel = "kv.value", onChange = () => {}, variables = null, valueCompletions = null, rowAction = null } = {}) {
+  /// `keyCompletions(row)` is the same for a row's key. `rowAction` ({label, icon,
+  /// onClick(row)}), when given, is one more button per row.
+  constructor(container, { keyLabel = "kv.key", valueLabel = "kv.value", onChange = () => {}, variables = null, keyCompletions = null, valueCompletions = null, rowAction = null } = {}) {
     this.container = container;
     this.keyLabel = keyLabel;
     this.valueLabel = valueLabel;
     this.onChange = onChange;
     this.variables = variables;
+    this.keyCompletions = keyCompletions;
     this.valueCompletions = valueCompletions;
     this.rowAction = rowAction;
     this.rows = [];
@@ -117,6 +119,7 @@ export class KvEditor {
     if (action) line.classList.add("with-action");
     line.append(key, value, ...own);
     if (this.variables) for (const input of [key, value]) varField(input, this.variables);
+    if (this.keyCompletions) completeField(key, () => this.keyCompletions(row));
     if (this.valueCompletions) completeField(value, () => this.valueCompletions(row));
     return line;
   }

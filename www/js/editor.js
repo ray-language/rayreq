@@ -10,7 +10,7 @@ import { KvEditor, PartsEditor } from "./kv.js";
 import { activeTab, emit, on, state } from "./state.js";
 import { $, debounce, paramsFromUrl, parseJsonTemplate, reindentJson, setCount, urlFromParams } from "./util.js";
 import { refreshVariables, refreshVariablesSoon, renderVariables } from "./variables.js";
-import { refreshFields, varField } from "./varfield.js";
+import { refreshFields, sourceText, varField } from "./varfield.js";
 import { headerValues } from "./complete.js";
 
 /// What the active request's `{{variables}}` resolve to, as the program last said.
@@ -202,6 +202,13 @@ export function initEditor() {
   captures = new KvEditor($("captures"), {
     keyLabel: "kv.variable",
     valueLabel: "kv.path",
+    // A capture usually refreshes a variable that exists: the scope's names, without braces.
+    keyCompletions: () => {
+      const v = scope();
+      if (!v || !(v.variables || []).length) return null;
+      const names = [...new Set(v.variables.map((x) => x.key))].sort((a, b) => a.localeCompare(b));
+      return { items: names.map((value) => ({ value, hint: sourceText(v.variables.find((x) => x.key === value), v.environment) })) };
+    },
     onChange: (rows) => {
       const d = draft();
       if (!d || loading) return;

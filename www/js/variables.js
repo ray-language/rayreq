@@ -132,13 +132,15 @@ function renderSuggest(box, names, add) {
   box.replaceChildren();
   box.hidden = names.length === 0;
   if (!names.length) return;
-  box.append(el("span", { text: t("vars.suggestMissing") }));
-  for (const name of names) {
-    box.append(el("ray-button", { size: "xs", variant: "light", onclick: () => add([name]) }, el("ray-icon", { slot: "left", name: "plus" }), name));
+  const sorted = [...names].sort((a, b) => a.localeCompare(b));
+  const chips = el("div", { class: "chips" });
+  for (const name of sorted) {
+    chips.append(el("ray-button", { size: "xs", variant: "light", onclick: () => add([name]) }, el("ray-icon", { slot: "left", name: "plus" }), name));
   }
-  if (names.length > 1) {
-    box.append(el("ray-button", { size: "xs", variant: "subtle", class: "add-all", onclick: () => add(names) }, t("vars.addAll")));
+  if (sorted.length > 1) {
+    chips.append(el("ray-button", { size: "xs", variant: "subtle", class: "add-all", onclick: () => add(sorted) }, t("vars.addAll")));
   }
+  box.append(el("span", { text: t("vars.suggestMissing") }), chips);
 }
 
 /// A row copied into other environments' tables (kept with Save, like any edit).

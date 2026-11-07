@@ -2,6 +2,7 @@
 // program's menus (window.rayreq.menu), its "may I quit?" (window.rayreq.requestQuit) and the
 // release its startup check found (window.rayreq.updateFound).
 
+import "./icons.js";
 import { enableRaylang, notify } from "@raylang/elements";
 import { initAccent } from "./accent.js";
 import * as A from "./actions.js";

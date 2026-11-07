@@ -10,6 +10,7 @@ import { setLanguage, t } from "./i18n.js";
 import { activeTab, emit, isDirty, state } from "./state.js";
 import { $ } from "./util.js";
 import * as R from "./runner.js";
+import { startRename } from "./tree.js";
 import * as V from "./variables.js";
 
 const tick = () => new Promise((r) => setTimeout(r, 30));
@@ -234,6 +235,20 @@ export async function run(port, sampleFile) {
     expect(state.tree.requests.find((x) => x.id === tab.id).folder_id === folder.id, "request moved into the folder");
     expect(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"][aria-expanded="true"]`), "folder row expanded");
     expect(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`).getAttribute("aria-level") === "2", "request nested under it");
+    // Renaming in place: the field fits the row, so nothing below it moves; Escape drops it.
+    {
+      const row = document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`);
+      const before = row.getBoundingClientRect().height;
+      startRename({ kind: "request", id: tab.id });
+      await frames();
+      const input = row.querySelector(".rename-input");
+      expect(input && input.value === "Renamed", "the rename field holds the name");
+      const during = row.getBoundingClientRect().height;
+      expect(Math.abs(during - before) <= 1, `the row keeps its height while renaming: ${before} → ${during}`);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
+      await until(() => !document.querySelector("#tree .rename-input"), "Escape ends the rename");
+      expect(state.tree.requests.find((x) => x.id === tab.id).name === "Renamed", "and keeps the name");
+    }
     // A level is indented by a chevron: a folder's requests start under its icon, their method
     // tags one left-aligned column.
     {
@@ -354,6 +369,26 @@ export async function run(port, sampleFile) {
     type(rows[0], "big");
     type(rows[1], "big");
     await V.refreshVariables();
+    // A capture's variable suggests the names in scope, without braces.
+    {
+      // The list opens only for the field with the focus: the captures must be on screen.
+      const shownTab = $("req-tabs").value;
+      $("req-tabs").value = "captures";
+      await frames();
+      const key = $("captures").querySelectorAll(".kv-row ray-input")[0];
+      const c = key.control;
+      // The dialog that just closed keeps the focus a moment longer.
+      await until(() => { c.focus(); return c.matches(":focus"); }, "the capture field takes the focus");
+      c.value = "ba";
+      c.setSelectionRange(2, 2);
+      c.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      await until(() => suggested(key).includes("base"), `captures suggest the scope's names: ${suggested(key)}`);
+      expect(!suggested(key).some((s) => s.includes("{{")), "no braces in them");
+      c.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true, cancelable: true }));
+      type(key, "big");
+      await until(() => !suggested(key).length, "the list is closed again");
+      $("req-tabs").value = shownTab;
+    }
     expect(tab.vars.missing.join() === "nope", `missing: ${JSON.stringify(tab.vars)}`);
     expect(tab.vars.url === `${base}/echo?x=folder&y={{nope}}`, `resolved URL: ${tab.vars.url}`);
     expect($("url-resolved").textContent === tab.vars.url && !$("url-preview").hidden, "the resolved URL is shown");
@@ -380,10 +415,21 @@ export async function run(port, sampleFile) {
       await until(() => pop.open, "the popover opens on hover");
       expect(body.querySelector(".value")?.textContent === "folder", `the popover says the value: ${body.textContent}`);
       expect(body.querySelector(".src")?.textContent.includes("Users"), `and the source: ${body.textContent}`);
+      // The folder's value was set for the active environment: value, source and environment, labelled.
+      const labels = [...body.querySelectorAll("dt")].map((d) => d.textContent).join();
+      expect(labels === `${t("kv.value")},${t("vars.source")},${t("env.label")}`, `each fact has its label: ${labels}`);
+      expect(body.querySelector(".env")?.textContent === "Default", `and the environment is named: ${body.textContent}`);
       expect(!urlBox.control.title, "no tooltip besides it");
       hover(2);
       await until(() => body.querySelector("form"), "a missing name offers to create it");
       expect(body.querySelector(".name").textContent === "nope", `about the missing name: ${body.textContent}`);
+      await frames();
+      {
+        // The body is the panel's content box: the button must lie inside it (the form wraps).
+        const panel = body.getBoundingClientRect();
+        const button = body.querySelector("ray-button").getBoundingClientRect();
+        expect(button.right <= panel.right + 1 && button.left >= panel.left - 1, `the create button fits the panel: ${button.left}–${button.right} in ${panel.left}–${panel.right}`);
+      }
       type(body.querySelector("ray-input"), "made");
       body.querySelector("form").requestSubmit();
       await until(() => !pop.open, "creating closes the popover");
