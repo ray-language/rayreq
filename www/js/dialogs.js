@@ -1,7 +1,13 @@
-// The page's own dialogs (a name, a destination) as promises. Yes/no questions use
-// confirmDialog(), which the bridge turns into the system's dialog.
+// The page's own dialogs (a name, a destination) as promises. Yes/no questions go through
+// confirm(), the page's own dialog rather than the system's: that one follows the desktop's
+// appearance, not the theme chosen in the app.
 
-import { getHost, hostCan } from "@raylang/elements";
+import { confirmDialog, getHost, hostCan } from "@raylang/elements";
+
+/// A yes/no question in the page's theme; resolves true when confirmed.
+export function confirm(options) {
+  return confirmDialog({ ...options, native: false });
+}
 import { $, el } from "./util.js";
 import { t } from "./i18n.js";
 

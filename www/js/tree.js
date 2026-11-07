@@ -1,7 +1,7 @@
 // The sidebar: the project selector and the tree of folders and requests (WAI-ARIA tree:
 // arrows move, Left/Right fold, Enter opens, F2 renames in place, Delete deletes), with drag
-// and drop to move (onto empty space: to the root) and one native context menu whose items
-// follow the row it was opened on.
+// and drop to move (onto empty space: to the root) and one context menu (the page's own, so it
+// follows the app's theme) whose items follow the row it was opened on.
 
 import * as A from "./actions.js";
 import { t } from "./i18n.js";
@@ -170,8 +170,8 @@ function activate(node) {
 
 // ---- the context menu ----------------------------------------------------------------------
 
-function menuItem(value, labelKey, color) {
-  return el("ray-menu-item", { value, color }, t(labelKey));
+function menuItem(value, labelKey, icon, color) {
+  return el("ray-menu-item", { value, color }, el("ray-icon", { slot: "left", name: icon }), t(labelKey));
 }
 
 function fillMenu(node) {
@@ -179,15 +179,15 @@ function fillMenu(node) {
   for (const old of menu.querySelectorAll("ray-menu-item, ray-menu-divider")) old.remove();
   const items = [];
   if (!node || node.kind === "folder") {
-    items.push(menuItem("new-request", "menu.newRequest"), menuItem("new-folder", "menu.newFolder"), menuItem("import-curl", "menu.importCurl"), menuItem("import-openapi", "menu.importOpenApi"));
-    items.push(el("ray-menu-divider"), menuItem("run", node ? "menu.runFolder" : "menu.runAll"));
+    items.push(menuItem("new-request", "menu.newRequest", "plus"), menuItem("new-folder", "menu.newFolder", "folder"), menuItem("import-curl", "menu.importCurl", "terminal"), menuItem("import-openapi", "menu.importOpenApi", "file"));
+    items.push(el("ray-menu-divider"), menuItem("run", node ? "menu.runFolder" : "menu.runAll", "play"));
   }
   if (node) {
     if (items.length) items.push(el("ray-menu-divider"));
-    if (node.kind === "folder") items.push(menuItem("variables", "menu.variables"), menuItem("auth", "menu.auth"));
-    items.push(menuItem("rename", "menu.rename"));
-    if (node.kind === "request") items.push(menuItem("duplicate", "menu.duplicate"));
-    items.push(menuItem("move", "menu.move"), el("ray-menu-divider"), menuItem("delete", "menu.delete", "red"));
+    if (node.kind === "folder") items.push(menuItem("variables", "menu.variables", "braces"), menuItem("auth", "menu.auth", "lock"));
+    items.push(menuItem("rename", "menu.rename", "pencil"));
+    if (node.kind === "request") items.push(menuItem("duplicate", "menu.duplicate", "copy"));
+    items.push(menuItem("move", "menu.move", "arrow-right"), el("ray-menu-divider"), menuItem("delete", "menu.delete", "trash", "red"));
   }
   menu.append(...items);
 }
@@ -234,8 +234,7 @@ export function initTree() {
     if (node.kind === "request") renderTree();
   });
 
-  // The right-clicked row's items, filled before the menu reads them (a native one reads them
-  // the moment it opens).
+  // The right-clicked row's items, filled before the menu reads them.
   $("tree-menu").addEventListener("ray-request-open", (e) => {
     menuTarget = nodeOf(e.detail.event.target.closest(".tree-row"));
     if (menuTarget) {

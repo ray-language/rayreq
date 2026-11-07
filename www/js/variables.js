@@ -4,12 +4,12 @@
 // What a request resolves to always comes from the program (`variables`, the same function the
 // send uses: docs/VARIABLES.md, R7); the page never computes a value itself.
 
-import { confirmDialog, notify } from "@raylang/elements";
+import { notify } from "@raylang/elements";
 import * as A from "./actions.js";
 import { call } from "./api.js";
 import { formatTime, t } from "./i18n.js";
 import { AuthEditor } from "./auth.js";
-import { askTargets } from "./dialogs.js";
+import { askTargets, confirm } from "./dialogs.js";
 import { KvEditor } from "./kv.js";
 import { activeTab, emit, folderOf, on, state } from "./state.js";
 import { $, PLACEHOLDER, debounce, el, setCount } from "./util.js";
@@ -248,7 +248,7 @@ async function runEnvMenu(value) {
     case "duplicate": return askEnvName("duplicate", t("env.copyName", { name: env.name }));
     case "rename": return askEnvName("rename", env.name);
     case "delete": {
-      const yes = await confirmDialog({
+      const yes = await confirm({
         label: t("env.deleteTitle", { name: env.name }),
         message: t("env.deleteText"),
         confirmLabel: t("dialog.delete"),
@@ -426,7 +426,7 @@ async function renderCookies() {
 async function clearCookies() {
   const env = state.environments.find((e) => e.active);
   if (!env) return;
-  const yes = await confirmDialog({
+  const yes = await confirm({
     label: t("cookies.clearTitle", { name: env.name }),
     message: t("cookies.clearText"),
     confirmLabel: t("cookies.clear"),

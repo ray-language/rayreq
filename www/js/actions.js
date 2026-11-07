@@ -4,9 +4,9 @@
 //   environments (the list or the active one changed) · variables (what requests resolve to
 //   may have changed)
 
-import { confirmDialog, notify } from "@raylang/elements";
+import { notify } from "@raylang/elements";
 import { call, log } from "./api.js";
-import { askCurl, askDestination, askName, askOpenApi } from "./dialogs.js";
+import { askCurl, askDestination, askName, askOpenApi, confirm } from "./dialogs.js";
 import { t } from "./i18n.js";
 import {
   activeTab, canonical, emit, folderOf, isDirty, loadExpanded, makeTab, nextRun,
@@ -87,7 +87,7 @@ export async function editProject() {
 export async function deleteProject() {
   const p = state.project;
   if (!p) return;
-  const yes = await confirmDialog({
+  const yes = await confirm({
     label: t("project.deleteTitle", { name: p.name }),
     message: t("project.deleteText"),
     confirmLabel: t("dialog.delete"),
@@ -226,7 +226,7 @@ function requestsUnder(folderId) {
 export async function remove(node) {
   if (node.kind === "folder") {
     const f = folderOf(node.id);
-    const yes = await confirmDialog({
+    const yes = await confirm({
       label: t("folder.deleteTitle", { name: f.name }),
       message: t("folder.deleteText"),
       confirmLabel: t("dialog.delete"),
@@ -239,7 +239,7 @@ export async function remove(node) {
     dropTabs(gone);
   } else {
     const r = requestOf(node.id);
-    const yes = await confirmDialog({
+    const yes = await confirm({
       label: t("request.deleteTitle", { name: r.name }),
       message: t("request.deleteText"),
       confirmLabel: t("dialog.delete"),
@@ -387,7 +387,7 @@ export async function closeTab(id = state.active) {
   const tab = tabOf(id);
   if (!tab) return;
   if (isDirty(tab)) {
-    const discard = await confirmDialog({
+    const discard = await confirm({
       label: t("tabs.unsavedTitle", { name: tab.draft.name }),
       message: t("tabs.unsavedText"),
       confirmLabel: t("tabs.discard"),
@@ -416,7 +416,7 @@ export function dirtyTabs() {
 async function confirmLeave() {
   const dirty = dirtyTabs();
   if (!dirty.length) return true;
-  return confirmDialog({
+  return confirm({
     label: t("quit.unsavedTitle"),
     message: t("quit.unsavedText", { n: dirty.length }),
     confirmLabel: t("tabs.discard"),
@@ -562,7 +562,7 @@ export async function cancel(tab = activeTab()) {
 export async function quit() {
   const dirty = dirtyTabs();
   if (dirty.length) {
-    const yes = await confirmDialog({
+    const yes = await confirm({
       label: t("quit.unsavedTitle"),
       message: t("quit.unsavedText", { n: dirty.length }),
       confirmLabel: t("quit.quit"),

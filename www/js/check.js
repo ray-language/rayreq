@@ -294,16 +294,24 @@ export async function run(port, sampleFile) {
     pick(keptAccent);
 
     // A right click reads the items of the row clicked, not those of the previous one.
+    // The menu is the page's own (it follows the app's theme, the system's follows the desktop).
     const menu = $("tree-menu");
     const read = [];
-    menu.popupNative = async () => {
+    // Closed only once it has really opened: `open` flips before the popover's own toggle
+    // event, and closing in between gets undone by it (finding #313).
+    const settled = (event) => new Promise((resolve) => menu.addEventListener(event, resolve, { once: true }));
+    const rightClick = async (row) => {
+      const opened = settled("ray-open");
+      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true }));
+      await opened;
       read.push([...menu.querySelectorAll("ray-menu-item")].map((i) => i.getAttribute("value")));
-      return null;
+      expect(menu.querySelectorAll("ray-menu-item ray-icon").length === menu.querySelectorAll("ray-menu-item").length, "every tree menu item has an icon");
+      const closed = settled("ray-close");
+      menu.open = false;
+      await closed;
     };
-    const rightClick = (row) => row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true }));
-    rightClick(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`));
-    rightClick(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"]`));
-    delete menu.popupNative;
+    await rightClick(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`));
+    await rightClick(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"]`));
     expect(read.length === 2 && read[0].includes("duplicate") && !read[0].includes("new-request"), `request menu: ${read[0]}`);
     expect(read[1].includes("new-request") && !read[1].includes("duplicate"), `folder menu: ${read[1]}`);
     // A right click selects no text in the app's chrome (WebKit reads only the prefixed
