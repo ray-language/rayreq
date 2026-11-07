@@ -11,6 +11,25 @@ make check      # the real page driven through a send against a local server
 make            # every target
 ```
 
+## Install
+
+One line, for the current user. It downloads the latest release for this machine, checks it
+against the signed manifest and installs it where the app can update itself afterwards.
+
+```sh
+# macOS (/Applications) and Linux (~/.local/opt/rayreq + a launcher)
+curl -sSfL https://raw.githubusercontent.com/ray-language/rayreq/main/install.sh | sh
+```
+
+```powershell
+# Windows (%LOCALAPPDATA%\Programs\RayReq + a Start Menu shortcut)
+irm https://raw.githubusercontent.com/ray-language/rayreq/main/install.ps1 | iex
+```
+
+`RAYREQ_VERSION=0.1.2` installs that release instead of the latest; `RAYREQ_INSTALL_DIR`
+installs somewhere else. The zips are on the [releases page](https://github.com/ray-language/rayreq/releases)
+too. From then on the app checks for new versions on its own (RayReq → Check for Updates…).
+
 ## What it does
 
 - **Projects** with **nested folders** and **requests**: create, rename, duplicate, move (drag

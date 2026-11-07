@@ -43,6 +43,12 @@ gh release create $TAG dist/*.zip dist/update.json dist/update.json.sig --title 
 
 The release notes URL in the manifest is this release's page.
 
+## First install
+
+`install.sh` (macOS, Linux) and `install.ps1` (Windows) at the repository root read the same
+manifest, verify the zip and install it where the app can update itself; the README shows the
+one-line commands. They read `main`, so a change to them is live as soon as it is pushed.
+
 ## Rehearsing an update without publishing
 
 An installed app updates from whatever manifest `RAYREQ_UPDATE_URL` names. Build the next
