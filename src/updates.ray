@@ -1,0 +1,88 @@
+//! Self-update through std/update. The manifest is the `update.json` of the latest GitHub
+//! release, signed with the key whose public half is in ray.toml (`ray release` seals it).
+//! The check and the download run in fibers (main.ray); applying the package and relaunching
+//! happen in the main loop, right before the process exits. Nothing here touches the window.
+
+import std/json;
+import std/update;
+import jsonv;
+
+/// The manifest GitHub serves for the latest release, whatever its tag.
+pub const MANIFEST_URL: string = "https://github.com/ray-language/rayreq/releases/latest/download/update.json";
+
+/// Where the manifest lives: RAYREQ_UPDATE_URL (a rehearsal against a local server, see
+/// docs/RELEASING.md), else the latest GitHub release.
+pub fn manifest_url() -> string {
+    match (env("RAYREQ_UPDATE_URL")) {
+        Option.Some(u) => if (u != "") { u } else { MANIFEST_URL },
+        Option.None => MANIFEST_URL,
+    }
+}
+
+/// The running version as std/update sees it: the bundle's, or "dev" under `ray run`.
+pub fn current() -> string {
+    update.current()
+}
+
+/// Whether a check should run on its own at startup: only a bundle (under `ray run` every
+/// published version is "newer" than "dev", which would nag at every start).
+pub fn checks_at_startup() -> bool {
+    update.current() != "dev"
+}
+
+/// The newer release for this platform, if any. `Err` when the manifest cannot be fetched or
+/// is not trusted.
+pub fn check(manifest: string) -> Result<Option<update.Release>, string> {
+    update.check(manifest)
+}
+
+/// Downloads the artifact of `r`, verified (size and SHA-256).
+pub fn download(r: update.Release) -> Result<update.Package, string> {
+    update.download(r)
+}
+
+/// Replaces the installed app with `p`; where it went.
+pub fn apply(p: update.Package) -> Result<string, string> {
+    update.apply(p)
+}
+
+/// Replaces the installed app with `p` and starts the new one; the caller then exits.
+pub fn apply_and_relaunch(p: update.Package) -> Result<int, string> {
+    update.apply(p)?;
+    update.relaunch()
+}
+
+/// What a previous update left behind (`*.old`): removed at startup.
+pub fn cleanup() -> int {
+    update.cleanup()
+}
+
+/// A release as the page sees it (the same shape comes back in `updates.install`).
+pub fn to_json(r: update.Release) -> json.Json {
+    jsonv.obj(
+        [
+            ("version", jsonv.str(r.version)),
+            ("notes", jsonv.str(r.notes)),
+            ("min_version", jsonv.str(r.min_version)),
+            ("url", jsonv.str(r.url)),
+            ("sha256", jsonv.str(r.sha256)),
+            ("size", jsonv.num(r.size))
+        ]
+    )
+}
+
+/// The release the page asks to install, as `check` reported it.
+pub fn from_json(j: json.Json) -> Result<update.Release, string> {
+    let r = update.Release {
+        version: jsonv.need_str(j, "version")?,
+        notes: jsonv.get_str(j, "notes"),
+        min_version: jsonv.get_str(j, "min_version"),
+        url: jsonv.need_str(j, "url")?,
+        sha256: jsonv.need_str(j, "sha256")?,
+        size: jsonv.need_int(j, "size")?
+    };
+    if (!r.url.starts_with("https://") && !r.url.starts_with("http://")) {
+        return Result.Err("bad artifact URL: ${r.url}");
+    }
+    Result.Ok(r)
+}

@@ -59,13 +59,19 @@ fn edit_items() -> [ui.MenuItem] {
     ]
 }
 
-/// The About item, in the application menu. Its tag is "about", not "role:about": the item
+/// The About and Check for Updates items, in the application menu. Its tag is "about", not "role:about": the item
 /// reaches the page on every platform and opens the app's own About window (the page's dialog,
 /// with the icon, the version and the copyright), the same on macOS, Linux and Windows. The
 /// system's panel is still described (`describe`), for whatever else opens it. Before the first
 /// window.
 pub fn install_about(name: string, version: string, lang: string) -> Result<int, string> {
-    ui.app_menu(name, [ui.item("about", tr(lang, "About ${name}", "Acerca de ${name}"), "")])?;
+    ui.app_menu(
+        name,
+        [
+            ui.item("about", tr(lang, "About ${name}", "Acerca de ${name}"), ""),
+            ui.item("check-updates", tr(lang, "Check for Updates…", "Buscar actualizaciones…"), "")
+        ]
+    )?;
     describe(name, version, lang)
 }
 

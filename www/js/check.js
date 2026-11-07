@@ -842,6 +842,30 @@ export async function run(port, sampleFile) {
     $("about-dialog").close("");
     await until(() => !$("about-dialog").open, "the About dialog closed");
 
+    // Updates. The check reads the echo server: not a manifest, so it fails like an untrusted
+    // one. A release the program reports shows in the status bar and the dialog; "later"
+    // keeps the status item, which reopens the dialog; "skip" hides it.
+    let failed = "";
+    try {
+      await call("updates.check");
+    } catch (e) {
+      failed = e.message;
+    }
+    expect(failed !== "", "a bad manifest is a failed check");
+    window.rayreq.updateFound({ version: "9.9.9", notes: "https://example.com/notes", min_version: "", url: "https://example.com/x.zip", sha256: "", size: 1 });
+    await until(() => $("update-dialog").open, "the update dialog opened");
+    expect($("update-text").textContent.includes("9.9.9") && $("update-text").textContent.includes(state.version), "the dialog names both versions");
+    expect(!$("update-notes-line").hidden, "the notes link shows");
+    expect(!$("status-update").hidden && $("status-update").textContent.includes("9.9.9"), "the status bar offers 9.9.9");
+    $("update-later").click();
+    await until(() => !$("update-dialog").open, "later closed the dialog");
+    expect(!$("status-update").hidden, "the status item stays");
+    $("status-update").click();
+    await until(() => $("update-dialog").open, "the status item reopens the dialog");
+    $("update-skip").click();
+    await until(() => !$("update-dialog").open && $("status-update").hidden, "skip hid the offer");
+    await until(() => state.settings.skip_update === "9.9.9", "the skipped version is a setting");
+
     // Spanish and back.
     setLanguage("es");
     expect(t("request.send") === "Enviar" && document.documentElement.lang === "es", "Spanish");

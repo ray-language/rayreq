@@ -197,6 +197,7 @@
   <ray-statusbar slot="footer">
     <ray-statusbar-item id="status-project"><ray-icon slot="icon" name="folder"></ray-icon><span></span></ray-statusbar-item>
     <ray-statusbar-item id="status-env"><ray-icon slot="icon" name="monitor"></ray-icon><span></span></ray-statusbar-item>
+    <ray-statusbar-item slot="right" id="status-update" action color="primary" hidden><ray-icon slot="icon" name="download"></ray-icon><span></span></ray-statusbar-item>
     <ray-statusbar-item slot="right" id="status-hint"></ray-statusbar-item>
     <ray-statusbar-item slot="right" id="status-version"></ray-statusbar-item>
   </ray-statusbar>
@@ -281,6 +282,19 @@
     <span class="about-copyright" data-i18n="about.copyright"></span>
   </ray-stack>
   <ray-button slot="footer" data-dialog-close autofocus><span data-i18n="dialog.close"></span></ray-button>
+</ray-dialog>
+
+<!-- A newer release: offered by the startup check or by Check for Updates. Installing downloads
+     it (verified), replaces the app and relaunches: the dialog stays until the process ends. -->
+<ray-dialog id="update-dialog" size="lg" data-i18n-attr="label:update.title">
+  <ray-stack gap="sm">
+    <p id="update-text" class="update-text"></p>
+    <p id="update-notes-line" hidden><a id="update-notes" href="#" data-i18n="update.notes"></a></p>
+    <div id="update-busy" class="update-busy" hidden><ray-spinner size="sm"></ray-spinner><span id="update-busy-text"></span></div>
+  </ray-stack>
+  <ray-button slot="footer" id="update-skip" variant="subtle"><span data-i18n="update.skip"></span></ray-button>
+  <ray-button slot="footer" id="update-later" data-dialog-close><span data-i18n="update.later"></span></ray-button>
+  <ray-button slot="footer" id="update-install" variant="primary" autofocus><span data-i18n="update.install"></span></ray-button>
 </ray-dialog>
 
 <ray-dialog id="cookies-dialog" size="xl">

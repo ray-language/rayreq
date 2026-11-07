@@ -10,22 +10,33 @@
 //   ray run src/main.ray --check
 //                              open it on a scratch database, drive the page through a send
 //                              against a local server, exit 0/1
+//   RayReq --update            (the installed binary) no window: install the latest release
+//                              over this one and exit 0; 0 and a note when up to date; 1 on
+//                              error. Start the app again yourself. RAYREQ_UPDATE_URL points
+//                              it at another manifest (a rehearsal, see docs/RELEASING.md).
 
 import std/fs;
 import std/json;
+import std/time;
 import std/ui;
+import std/update;
 import elements/bridge;
 import api;
 import exec;
+import jsonv;
 import menus;
 import model;
 import oauth;
 import openapi;
 import selfcheck;
 import store;
+import updates;
 import view;
 
 const APP_NAME: string = "RayReq";
+
+/// How long after the window opens the startup update check runs.
+const STARTUP_CHECK_MS: int = 8000;
 
 enum Msg {
     Ui(ui.UiEvent),
@@ -35,6 +46,11 @@ enum Msg {
     Spec(Pending, api.SpecJob, Result<openapi.Imported, string>),
     /// An OAuth 2 token request ended: the page's request it answers, the job and the token.
     Token(Pending, api.OAuthJob, Result<oauth.Token, string>),
+    /// The update manifest was read: the page's request it answers (none for the check at
+    /// startup) and the newer release, if any.
+    Checked(Option<Pending>, Result<Option<update.Release>, string>),
+    /// A release was downloaded and verified: the page's request it answers and the package.
+    Downloaded(Pending, Result<update.Package, string>),
 }
 
 /// A send the page is waiting for.
@@ -126,6 +142,21 @@ fn play_browser(url: string) {
     }
 }
 
+/// The update manifest, in a fiber: a slow or absent network never holds the window.
+fn run_check(inbox: Channel<Msg>, p: Option<Pending>, manifest: string) {
+    send(inbox, Msg.Checked(p, updates.check(manifest)));
+}
+
+/// A while after the window opened, once: the check nobody asked for.
+fn run_startup_check(inbox: Channel<Msg>, manifest: string) {
+    time.sleep(STARTUP_CHECK_MS);
+    run_check(inbox, Option.None, manifest);
+}
+
+fn run_download(inbox: Channel<Msg>, p: Pending, r: update.Release) {
+    send(inbox, Msg.Downloaded(p, updates.download(r)));
+}
+
 /// Reading and converting a large description takes seconds: it happens here, and the main
 /// loop only writes the result.
 fn run_spec(inbox: Channel<Msg>, p: Pending, job: api.SpecJob) {
@@ -200,6 +231,8 @@ fn page_url() -> Result<string, string> {
 fn run(check: bool) -> Result<int, string> {
     let dir = if (check) { fs.make_temp_dir("rayreq-check")? } else { data_dir()? };
     fs.mkdir(dir)?;
+    // What the last update left behind, now that the old process is gone.
+    let _old = updates.cleanup();
     let s = store.open(dir + "/rayreq.db")?;
     // Session cookies end with the session, as in a browser.
     store.end_cookie_session(s)?;
@@ -211,8 +244,13 @@ fn run(check: bool) -> Result<int, string> {
     var menu_lang = lang;
 
     var url = page_url()?;
+    // Under --check the manifest is a path of the echo server: not a manifest, so the check
+    // fails the way an untrusted one does, without the network.
+    var manifest = updates.manifest_url();
     if (check) {
-        url = url + "?check=" + to_string(selfcheck.start_server()?) + selfcheck.sample_query()?;
+        let port = selfcheck.start_server()?;
+        url = url + "?check=" + to_string(port) + selfcheck.sample_query()?;
+        manifest = "http://127.0.0.1:${port}/update.json";
     }
     var o = ui.options(1280, 820);
     o.min_width = 860;
@@ -230,6 +268,11 @@ fn run(check: bool) -> Result<int, string> {
     let _forwarder = spawn(fn() {
         forward(inbox);
     });
+    if (!check && updates.checks_at_startup()) {
+        let _checker = spawn(fn() {
+            run_startup_check(inbox, manifest);
+        });
+    }
     let pending: Map<int, Pending> = Map.new();
     // Logins waiting for the browser, by the page's run id: a value stops one.
     let logins: Map<int, Channel<bool>> = Map.new();
@@ -252,6 +295,43 @@ fn run(check: bool) -> Result<int, string> {
             Msg.Token(p, job, got) => {
                 logins.remove(job.run);
                 reply(p.window, p.reply, api.keep_token(s, job, got));
+            },
+            Msg.Checked(asked, found) => match (asked) {
+                Option.Some(p) => match (found) {
+                    Result.Ok(Option.Some(r)) => reply(p.window, p.reply, api.ok(updates.to_json(r))),
+                    Result.Ok(Option.None) => reply(p.window, p.reply, api.ok(json.Json.JNull)),
+                    Result.Err(err) => reply(p.window, p.reply, api.fail(err)),
+                },
+                Option.None => match (found) {
+                    // The startup check: a newer release reaches the page; silence otherwise.
+                    Result.Ok(Option.Some(r)) => {
+                        let j = json.stringify(updates.to_json(r));
+                        ui.eval_js(window, "window.rayreq && window.rayreq.updateFound(${j})")?;
+                    },
+                    Result.Ok(Option.None) => { },
+                    Result.Err(err) => eprint("rayreq: update check: " + err),
+                },
+            },
+            Msg.Downloaded(p, got) => {
+                let package = match (got) {
+                    Result.Ok(pk) => pk,
+                    Result.Err(err) => {
+                        reply(p.window, p.reply, api.fail(err));
+                        continue;
+                    },
+                };
+                match (updates.apply_and_relaunch(package)) {
+                    Result.Ok(_) => {
+                        reply(
+                            p.window,
+                            p.reply,
+                            api.ok(jsonv.obj([("restarting", jsonv.flag(true))]))
+                        );
+                        close(window);
+                        return Result.Ok(0);
+                    },
+                    Result.Err(err) => reply(p.window, p.reply, api.fail(err)),
+                }
             },
             Msg.Ui(raw) => {
                 let e = match (bridge.route(native, raw)) {
@@ -324,6 +404,22 @@ fn run(check: bool) -> Result<int, string> {
                         Result.Ok(_) => reply(target, id, api.ok(json.Json.JBool(true))),
                         Result.Err(err) => reply(target, id, api.fail(err)),
                     },
+                    api.Action.OpenUrl(u) => match (ui.open_url(u)) {
+                        Result.Ok(_) => reply(target, id, api.ok(json.Json.JBool(true))),
+                        Result.Err(err) => reply(target, id, api.fail(err)),
+                    },
+                    api.Action.CheckUpdate => {
+                        let p = Pending { window: target, reply: id };
+                        let _t = spawn(fn() {
+                            run_check(inbox, Option.Some(p), manifest);
+                        });
+                    },
+                    api.Action.InstallUpdate(r) => {
+                        let p = Pending { window: target, reply: id };
+                        let _t = spawn(fn() {
+                            run_download(inbox, p, r);
+                        });
+                    },
                     api.Action.ImportSpec(job) => {
                         let p = Pending { window: target, reply: id };
                         let _t = spawn(fn() {
@@ -380,7 +476,34 @@ fn run(check: bool) -> Result<int, string> {
     }
 }
 
+/// `--update`: the GUI's install, in the terminal and without the relaunch.
+fn update_now() -> Result<int, string> {
+    let manifest = updates.manifest_url();
+    print("rayreq ${updates.current()}: checking ${manifest}");
+    let r = match (updates.check(manifest)?) {
+        Option.Some(r) => r,
+        Option.None => {
+            print("rayreq: up to date");
+            return Result.Ok(0);
+        },
+    };
+    print("rayreq: downloading ${r.version} (${r.size} bytes)");
+    let p = updates.download(r)?;
+    let root = updates.apply(p)?;
+    print("rayreq: installed ${r.version} at ${root}");
+    Result.Ok(0)
+}
+
 fn main() -> int {
+    if (args().contains("--update")) {
+        return match (update_now()) {
+            Result.Ok(code) => code,
+            Result.Err(e) => {
+                eprint("rayreq: update: " + e);
+                1
+            },
+        };
+    }
     match (run(args().contains("--check"))) {
         Result.Ok(code) => code,
         Result.Err(e) => {

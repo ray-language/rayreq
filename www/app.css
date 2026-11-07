@@ -319,6 +319,9 @@ table.runner-table td:last-child { font-family: inherit; word-break: normal; }
 
 /* ---- about ----------------------------------------------------------------------------- */
 
+.update-text { margin: 0; }
+.update-busy { display: flex; align-items: center; gap: var(--ray-space-xs); color: var(--ray-muted-foreground); font-size: var(--ray-font-size-sm); }
+
 .about { text-align: center; font-size: var(--ray-font-size-sm); color: var(--ray-muted-foreground); }
 .about-name { font-size: var(--ray-font-size-lg); color: var(--ray-foreground); }
 .about-copyright { font-size: var(--ray-font-size-xs); }

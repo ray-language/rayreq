@@ -38,11 +38,17 @@
 //!   cancel {run}                             → the pending send answers {cancelled: true}
 //!   history.list {request_id} · history.get {id} · history.clear {request_id}
 //!   body.save {history_id}                   → the path, or null when cancelled
-//!   settings.set {key, value} · clipboard.write {text} · log {message} · quit
+//!   settings.set {key, value} · clipboard.write {text} · url.open {url} · log {message} · quit
+//!   updates.check                            → the newer release for this platform, or null
+//!                                              (checked in a fiber; an untrusted manifest fails)
+//!   updates.install {release}                → {restarting: true} once the release (as
+//!                                              updates.check gave it) is downloaded, verified
+//!                                              and applied; RayReq then relaunches and exits
 
 import std/fs;
 import std/json;
 import std/time;
+import std/update;
 import assertions;
 import auth;
 import captures;
@@ -55,18 +61,21 @@ import oauth;
 import openapi;
 import runner;
 import store;
+import updates;
 import urls;
 import vars;
 import view;
 
-pub const VERSION: string = "0.1.1";
+pub const VERSION: string = "0.1.2";
 
 /// The settings the page may write. `tabs.<project id>` keeps the open tabs of a project;
-/// `block_unresolved` = "1" refuses to send a request with an unresolved `{{name}}`.
+/// `block_unresolved` = "1" refuses to send a request with an unresolved `{{name}}`;
+/// `skip_update` is the version the user chose not to be told about again.
 fn allowed_setting(key: string) -> bool {
     key == "language"
         || key == "last_project"
         || key == "block_unresolved"
+        || key == "skip_update"
         || key.starts_with("tabs.")
 }
 
@@ -125,6 +134,12 @@ pub enum Action {
     OAuth(OAuthJob),
     /// Stop waiting for the browser of the token request `run`, then answer this request.
     OAuthCancel(int),
+    /// Open the URL in the system browser.
+    OpenUrl(string),
+    /// Fetch the update manifest in a fiber, then answer with the newer release or null.
+    CheckUpdate,
+    /// Download the release in a fiber; then apply it, answer, relaunch and exit.
+    InstallUpdate(update.Release),
     Quit,
 }
 
@@ -951,6 +966,19 @@ fn dispatch(s: store.Store, req: json.Json, op: string) -> Result<Action, string
             jsonv.flag(true)
         },
         "clipboard.write" => return Result.Ok(Action.Clipboard(jsonv.get_str(req, "text"))),
+        "url.open" => {
+            let u = jsonv.need_str(req, "url")?;
+            if (!u.starts_with("https://") && !u.starts_with("http://")) {
+                return Result.Err("not a web URL: ${u}");
+            }
+            return Result.Ok(Action.OpenUrl(u));
+        },
+        "updates.check" => return Result.Ok(Action.CheckUpdate),
+        "updates.install" => {
+            return Result.Ok(
+                Action.InstallUpdate(updates.from_json(jsonv.need_obj(req, "release")?)?)
+            );
+        },
         "log" => {
             eprint("rayreq: page: " + jsonv.get_str(req, "message"));
             jsonv.flag(true)

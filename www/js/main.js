@@ -1,5 +1,6 @@
 // rayreq's page: boots the components and the bridge, loads the projects, and wires the
-// program's menus (window.rayreq.menu) and its "may I quit?" (window.rayreq.requestQuit).
+// program's menus (window.rayreq.menu), its "may I quit?" (window.rayreq.requestQuit) and the
+// release its startup check found (window.rayreq.updateFound).
 
 import { enableRaylang, notify } from "@raylang/elements";
 import { initAccent } from "./accent.js";
@@ -12,6 +13,7 @@ import { initRunner, openRunner } from "./runner.js";
 import { activeTab, emit, on, state } from "./state.js";
 import { initTabs } from "./tabs.js";
 import { initTree, renderProjects } from "./tree.js";
+import { checkForUpdates, initUpdates, updateFound } from "./updates.js";
 import { $, el } from "./util.js";
 import { initVariables, openCookies, openEnvironments } from "./variables.js";
 
@@ -162,6 +164,7 @@ function runMenu(tag) {
       case "copy-curl": return tab && A.copyCurl(tab);
       case "toggle-sidebar": return toggleSidebar();
       case "about": return openAbout();
+      case "check-updates": return checkForUpdates(true);
     }
   });
 }
@@ -250,6 +253,7 @@ async function boot() {
   initResponse();
   initVariables();
   initRunner();
+  initUpdates();
   on("tabs", () => showActive());
   on("welcome", renderWelcome);
 
@@ -278,6 +282,8 @@ async function boot() {
   window.rayreq = {
     menu: runMenu,
     requestQuit: () => A.guard(() => A.quit()),
+    // The startup check found a newer release.
+    updateFound: (release) => A.guard(() => updateFound(release)),
   };
   window.dispatchEvent(new Event("rayreq:ready"));
 }
