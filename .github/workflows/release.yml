@@ -51,6 +51,14 @@ jobs:
       - name: Tests
         run: ray test
 
+      # ray release on Windows runs signtool with the macOS [app] sign identity, and --no-sign
+      # does not turn it off (findings #309): build from a ray.toml without those lines.
+      - name: Drop the macOS signing identity (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          (Get-Content ray.toml) | Where-Object { $_ -notmatch '^(sign|notary) = ' } | Set-Content ray.toml
+
       - name: Release build (unsigned)
         run: ray release --no-sign -o dist
 
