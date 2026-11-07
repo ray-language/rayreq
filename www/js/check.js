@@ -900,7 +900,7 @@ export async function run(port, sampleFile) {
     expect(failed !== "", "a bad manifest is a failed check");
     window.rayreq.updateFound({ version: "9.9.9", notes: "https://example.com/notes", min_version: "", url: "https://example.com/x.zip", sha256: "", size: 1 });
     await until(() => $("update-dialog").open, "the update dialog opened");
-    expect($("update-text").textContent.includes("9.9.9") && $("update-text").textContent.includes(state.version), "the dialog names both versions");
+    expect($("update-new").textContent === "9.9.9" && $("update-current").textContent === state.version, "the dialog names both versions");
     expect(!$("update-notes-line").hidden, "the notes link shows");
     expect(!$("status-update").hidden && $("status-update").textContent.includes("9.9.9"), "the status bar offers 9.9.9");
     $("update-later").click();

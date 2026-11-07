@@ -285,15 +285,26 @@
 
 <!-- A newer release: offered by the startup check or by Check for Updates. Installing downloads
      it (verified), replaces the app and relaunches: the dialog stays until the process ends. -->
-<ray-dialog id="update-dialog" size="lg" data-i18n-attr="label:update.title">
-  <ray-stack gap="sm">
-    <p id="update-text" class="update-text"></p>
-    <p id="update-notes-line" hidden><a id="update-notes" href="#" data-i18n="update.notes"></a></p>
-    <div id="update-busy" class="update-busy" hidden><ray-spinner size="sm"></ray-spinner><span id="update-busy-text"></span></div>
-  </ray-stack>
-  <ray-button slot="footer" id="update-skip" variant="subtle"><span data-i18n="update.skip"></span></ray-button>
-  <ray-button slot="footer" id="update-later" data-dialog-close><span data-i18n="update.later"></span></ray-button>
-  <ray-button slot="footer" id="update-install" variant="primary" autofocus><span data-i18n="update.install"></span></ray-button>
+<ray-dialog id="update-dialog" size="34rem" class="update-dialog" data-i18n-attr="label:update.title">
+  <div class="update">
+    <img class="update-icon" src="icon.svg" alt="" width="64" height="64">
+    <div class="update-body">
+      <strong class="update-headline" data-i18n="update.headline"></strong>
+      <div class="update-versions" id="update-versions">
+        <span class="update-current" id="update-current"></span>
+        <ray-icon name="arrow-right"></ray-icon>
+        <ray-badge color="green" normal-case id="update-new"></ray-badge>
+      </div>
+      <p id="update-text" class="update-text" data-i18n="update.ready"></p>
+      <p id="update-notes-line" class="update-notes" hidden><a id="update-notes" href="#"><span data-i18n="update.notes"></span><ray-icon name="arrow-up-right"></ray-icon></a></p>
+      <div id="update-busy" class="update-busy" hidden><ray-progress size="xs"></ray-progress><span id="update-busy-text"></span></div>
+    </div>
+  </div>
+  <ray-button slot="footer" id="update-skip" variant="subtle" color="gray"><span data-i18n="update.skip"></span></ray-button>
+  <span slot="footer" class="update-actions">
+    <ray-button id="update-later" variant="default" data-dialog-close><span data-i18n="update.later"></span></ray-button>
+    <ray-button id="update-install" autofocus><ray-icon slot="left" name="download"></ray-icon><span data-i18n="update.install"></span></ray-button>
+  </span>
 </ray-dialog>
 
 <ray-dialog id="cookies-dialog" size="xl">

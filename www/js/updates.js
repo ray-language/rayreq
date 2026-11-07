@@ -16,7 +16,8 @@ let busy = false;
 
 function openDialog() {
   if (!found) return;
-  $("update-text").textContent = t("update.ready", { version: found.version, current: state.version });
+  $("update-current").textContent = state.version;
+  $("update-new").textContent = found.version;
   $("update-notes-line").hidden = !found.notes;
   setBusy(false);
   $("update-dialog").show();

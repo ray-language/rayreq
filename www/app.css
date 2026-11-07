@@ -327,8 +327,23 @@ table.runner-table td:last-child { font-family: inherit; word-break: normal; }
 
 /* ---- about ----------------------------------------------------------------------------- */
 
-.update-text { margin: 0; }
-.update-busy { display: flex; align-items: center; gap: var(--ray-space-xs); color: var(--ray-muted-foreground); font-size: var(--ray-font-size-sm); }
+/* ---- update ---------------------------------------------------------------------------- */
+
+.update { display: flex; gap: var(--ray-space-md); align-items: flex-start; }
+.update-icon { flex: none; }
+.update-body { display: flex; flex-direction: column; gap: var(--ray-space-sm); min-width: 0; }
+.update-headline { font-size: var(--ray-font-size-md); }
+.update-versions { display: flex; align-items: center; gap: var(--ray-space-xs); font-family: var(--ray-font-mono); font-size: var(--ray-font-size-sm); }
+.update-current { color: var(--ray-muted-foreground); }
+.update-versions ray-icon { color: var(--ray-muted-foreground); }
+.update-text { margin: 0; color: var(--ray-muted-foreground); font-size: var(--ray-font-size-sm); }
+.update-notes { margin: 0; font-size: var(--ray-font-size-sm); }
+.update-notes a { display: inline-flex; align-items: center; gap: 2px; color: var(--ray-primary); text-decoration: none; }
+.update-notes a:hover { text-decoration: underline; }
+.update-busy { display: flex; flex-direction: column; gap: var(--ray-space-xs); color: var(--ray-muted-foreground); font-size: var(--ray-font-size-sm); }
+/* Skip on its own at the start, the real choice at the end. */
+.update-dialog::part(footer) { justify-content: space-between; gap: var(--ray-space-sm); }
+.update-actions { display: flex; gap: var(--ray-space-sm); margin-inline-start: auto; }
 
 .about { text-align: center; font-size: var(--ray-font-size-sm); color: var(--ray-muted-foreground); }
 .about-name { font-size: var(--ray-font-size-lg); color: var(--ray-foreground); }
