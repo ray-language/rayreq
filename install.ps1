@@ -55,7 +55,10 @@ try {
     try { Remove-Item -Recurse -Force $dest } catch { throw "rayreq install: cannot replace $dest (is RayReq running? close it and try again)" }
   }
   Move-Item $bundle $dest
-  & (Join-Path $dest 'install.ps1')
+  # The bundle's script (Start Menu shortcut) runs in a child shell that may run scripts: the
+  # default execution policy refuses a .ps1 file even when this one came through iex.
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dest 'install.ps1')
+  if ($LASTEXITCODE -ne 0) { throw "rayreq install: the bundle's install.ps1 failed ($LASTEXITCODE)" }
   Write-Host "installed: $dest\RayReq.exe"
   Write-Host 'open it from the Start Menu. RayReq checks for new versions on its own (RayReq -> Check for Updates...).'
 } finally {
