@@ -322,6 +322,24 @@ export async function run(port, sampleFile) {
       await closed;
       expect(!menu.open, "a press on the tree closed its menu");
     }
+    // The tree fills the sidebar body, and a press at its very bottom (the empty space) closes
+    // the menu too; a press on a menu item does not.
+    {
+      const body = document.querySelector(".side-body");
+      const br = body.getBoundingClientRect();
+      const bottom = document.elementFromPoint(br.left + 20, br.bottom - 12);
+      expect(bottom === $("tree"), `the empty space of the sidebar is the tree (${bottom?.localName}.${bottom?.className})`);
+      const opened = settled("ray-open");
+      document.querySelector("#tree .tree-row").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true }));
+      await opened;
+      menu.querySelector("ray-menu-item").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(menu.open, "a press on a menu item keeps the menu open");
+      const closed = settled("ray-close");
+      bottom.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
+      await closed;
+      expect(!menu.open, "a press on the empty space of the sidebar closed the menu");
+    }
     expect(read.length === 2 && read[0].includes("duplicate") && !read[0].includes("new-request"), `request menu: ${read[0]}`);
     expect(read[1].includes("new-request") && !read[1].includes("duplicate"), `folder menu: ${read[1]}`);
     // A right click selects no text in the app's chrome (WebKit reads only the prefixed
