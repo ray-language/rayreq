@@ -1,7 +1,7 @@
 // The sidebar: the project selector and the tree of folders and requests (WAI-ARIA tree:
 // arrows move, Left/Right fold, Enter opens, F2 renames in place, Delete deletes), with drag
-// and drop to move (onto empty space: to the root) and one context menu (the page's own, so it
-// follows the app's theme) whose items follow the row it was opened on.
+// and drop to move (onto empty space: to the root) and one native context menu whose items
+// follow the row it was opened on.
 
 import * as A from "./actions.js";
 import { t } from "./i18n.js";
@@ -234,7 +234,8 @@ export function initTree() {
     if (node.kind === "request") renderTree();
   });
 
-  // The right-clicked row's items, filled before the menu reads them.
+  // The right-clicked row's items, filled before the menu reads them (a native one reads them
+  // the moment it opens).
   $("tree-menu").addEventListener("ray-request-open", (e) => {
     menuTarget = nodeOf(e.detail.event.target.closest(".tree-row"));
     if (menuTarget) {
@@ -246,13 +247,6 @@ export function initTree() {
     fillMenu(menuTarget);
   });
   $("tree-menu").addEventListener("ray-select", (e) => runMenu(e.detail.value));
-  // A press anywhere in the sidebar body closes the open menu: ray-menu's light dismiss leaves
-  // presses on itself and on its trigger alone, and for a context menu the trigger is the whole
-  // tree (finding #314). Presses inside the menu's own panel are its items.
-  $("tree-menu").addEventListener("pointerdown", (e) => {
-    const menu = $("tree-menu");
-    if (menu.open && !e.composedPath().includes(menu.panel)) menu.open = false;
-  }, true);
 
   tree.addEventListener("keydown", (e) => {
     if (e.target.closest(".rename-input")) return;

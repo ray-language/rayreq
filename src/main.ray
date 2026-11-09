@@ -400,6 +400,10 @@ fn run(check: bool) -> Result<int, string> {
                         }
                         reply(target, id, api.ok(json.Json.JBool(true)));
                     },
+                    api.Action.Appearance(mode) => match (ui.set_appearance(0, mode)) {
+                        Result.Ok(_) => reply(target, id, api.ok(json.Json.JBool(true))),
+                        Result.Err(err) => reply(target, id, api.fail(err)),
+                    },
                     api.Action.Clipboard(text) => match (ui.clipboard_write(text)) {
                         Result.Ok(_) => reply(target, id, api.ok(json.Json.JBool(true))),
                         Result.Err(err) => reply(target, id, api.fail(err)),

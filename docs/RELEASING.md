@@ -23,7 +23,7 @@ ray release -o dist --base-url "$BASE" --notes "$NOTES"                  # macOS
 ray release --no-sign -o dist --base-url "$BASE" --notes "$NOTES"        # Linux / Windows VMs
 ```
 
-On Windows strip the `sign` and `notary` lines from the VM's `ray.toml` first (findings #309).
+On Windows the macOS `sign` identity of `ray.toml` is ignored with a warning (raylang 1.27.90).
 The x86_64 Linux and Windows builds come from `.github/workflows/release.yml`, which runs on
 the tag push (and on demand): download its artifacts with `gh run download <run id>`, copy the
 zips into `dist/` and merge their `update.json` entries as below (their `url` is relative:

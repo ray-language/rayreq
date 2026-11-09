@@ -9,9 +9,9 @@ hash = "sha256:2d8c4e2e730031b0af341cde0cf4c7f8a6454b0a75b52564eedf818bde257c5b"
 
 [elements]
 url = "https://github.com/ray-language/elements"
-ref = "v0.10.0"
-commit = "63bc03afde4281039e8bb8ea7d6fe2ccdf49775c"
-hash = "sha256:c08d0d5b88cb917a6f06c6697a4be21b6f2e9e97f9b1c1cb850cd672f702c1fe"
+ref = "v0.11.0"
+commit = "626590ed949e3cde6b9cfe881966bf27e119511c"
+hash = "sha256:a1081e03b2d3fb29547d2e47e8b57046cb6faed7348a3fba19d157ae5dec14f2"
 
 [net]
 url = "https://github.com/ray-language/net"

@@ -293,53 +293,27 @@ export async function run(port, sampleFile) {
     setTheme(keptTheme);
     pick(keptAccent);
 
-    // A right click reads the items of the row clicked, not those of the previous one.
-    // The menu is the page's own (it follows the app's theme, the system's follows the desktop).
+    // A right click reads the items of the row clicked, not those of the previous one. The menu
+    // is the system's (through the bridge), so here its popup is stubbed to read the items.
     const menu = $("tree-menu");
     const read = [];
-    // Closed only once it has really opened: `open` flips before the popover's own toggle
-    // event, and closing in between gets undone by it (finding #313).
-    const settled = (event) => new Promise((resolve) => menu.addEventListener(event, resolve, { once: true }));
-    const rightClick = async (row) => {
-      const opened = settled("ray-open");
-      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true }));
-      await opened;
+    menu.popupNative = async () => {
       read.push([...menu.querySelectorAll("ray-menu-item")].map((i) => i.getAttribute("value")));
-      expect(menu.querySelectorAll("ray-menu-item ray-icon").length === menu.querySelectorAll("ray-menu-item").length, "every tree menu item has an icon");
-      const closed = settled("ray-close");
-      menu.open = false;
-      await closed;
+      return null;
     };
-    await rightClick(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`));
-    await rightClick(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"]`));
-    // A press on the tree itself closes it too (the trigger of a context menu is the whole tree).
+    const rightClick = (row) => row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true }));
+    rightClick(document.querySelector(`#tree .tree-row[data-kind="request"][data-id="${tab.id}"]`));
+    rightClick(document.querySelector(`#tree .tree-row[data-kind="folder"][data-id="${folder.id}"]`));
+    delete menu.popupNative;
+    // The tree fills the sidebar body: a right click on its empty space opens the root's menu
+    // (once the last dialog has finished closing, it is what the hit test finds there).
     {
-      const opened = settled("ray-open");
-      document.querySelector("#tree .tree-row").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true }));
-      await opened;
-      const closed = settled("ray-close");
-      document.querySelector("#tree .tree-row").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
-      await closed;
-      expect(!menu.open, "a press on the tree closed its menu");
+      const br = document.querySelector(".side-body").getBoundingClientRect();
+      const bottom = () => document.elementFromPoint(br.left + 20, br.bottom - 12);
+      await until(() => bottom() === $("tree"), `the empty space of the sidebar is the tree (${bottom()?.localName}#${bottom()?.id})`);
     }
-    // The tree fills the sidebar body, and a press at its very bottom (the empty space) closes
-    // the menu too; a press on a menu item does not.
-    {
-      const body = document.querySelector(".side-body");
-      const br = body.getBoundingClientRect();
-      const bottom = document.elementFromPoint(br.left + 20, br.bottom - 12);
-      expect(bottom === $("tree"), `the empty space of the sidebar is the tree (${bottom?.localName}.${bottom?.className})`);
-      const opened = settled("ray-open");
-      document.querySelector("#tree .tree-row").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true }));
-      await opened;
-      menu.querySelector("ray-menu-item").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
-      await new Promise((r) => setTimeout(r, 50));
-      expect(menu.open, "a press on a menu item keeps the menu open");
-      const closed = settled("ray-close");
-      bottom.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
-      await closed;
-      expect(!menu.open, "a press on the empty space of the sidebar closed the menu");
-    }
+    // The program follows the page's theme for the system's pieces.
+    expect((await call("appearance", { mode: "light" })) === true && (await call("appearance", { mode: "system" })) === true, "appearance follows the theme");
     expect(read.length === 2 && read[0].includes("duplicate") && !read[0].includes("new-request"), `request menu: ${read[0]}`);
     expect(read[1].includes("new-request") && !read[1].includes("duplicate"), `folder menu: ${read[1]}`);
     // A right click selects no text in the app's chrome (WebKit reads only the prefixed

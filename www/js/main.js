@@ -3,7 +3,7 @@
 // release its startup check found (window.rayreq.updateFound).
 
 import "./icons.js";
-import { enableRaylang, notify } from "@raylang/elements";
+import { enableRaylang, getTheme, notify, onThemeChange } from "@raylang/elements";
 import { initAccent } from "./accent.js";
 import * as A from "./actions.js";
 import { available, call, log } from "./api.js";
@@ -227,6 +227,19 @@ function trackSidebar() {
   sync();
 }
 
+// The system's pieces (the tree's context menu, confirm dialogs) follow the page's theme, not
+// the desktop's: the program sets the app's appearance from it.
+function followTheme() {
+  let sent = null;
+  const tell = (theme) => {
+    if (theme === sent) return;
+    sent = theme;
+    call("appearance", { mode: theme }).catch((e) => log(`appearance: ${e.message}`));
+  };
+  tell(getTheme());
+  onThemeChange(({ theme }) => tell(theme));
+}
+
 async function boot() {
   quietContextMenu();
   state.host = await enableRaylang();
@@ -255,6 +268,7 @@ async function boot() {
   initVariables();
   initRunner();
   initUpdates();
+  followTheme();
   on("tabs", () => showActive());
   on("welcome", renderWelcome);
 

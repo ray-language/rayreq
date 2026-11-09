@@ -39,6 +39,8 @@
 //!   history.list {request_id} · history.get {id} · history.clear {request_id}
 //!   body.save {history_id}                   → the path, or null when cancelled
 //!   settings.set {key, value} · clipboard.write {text} · url.open {url} · log {message} · quit
+//!   appearance {mode}                        → the system's menus and dialogs follow the page's
+//!                                              theme: "system", "light" or "dark"
 //!   updates.check                            → the newer release for this platform, or null
 //!                                              (checked in a fiber; an untrusted manifest fails)
 //!   updates.install {release}                → {restarting: true} once the release (as
@@ -127,6 +129,8 @@ pub enum Action {
     SaveBody(int),
     /// The page's language changed: rebuild the menus, then answer.
     Language(string),
+    /// The page's theme changed: the native pieces (popup menus, dialogs) follow it.
+    Appearance(string),
     Clipboard(string),
     /// Read and convert an API description in a fiber, then `store_spec`.
     ImportSpec(SpecJob),
@@ -983,6 +987,7 @@ fn dispatch(s: store.Store, req: json.Json, op: string) -> Result<Action, string
             eprint("rayreq: page: " + jsonv.get_str(req, "message"));
             jsonv.flag(true)
         },
+        "appearance" => return Result.Ok(Action.Appearance(jsonv.need_str(req, "mode")?)),
         "quit" => return Result.Ok(Action.Quit),
         _ => return Result.Err("unknown op: ${op}"),
     };

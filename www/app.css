@@ -52,7 +52,7 @@ ray-toaster { bottom: 1.5rem; }
 .side-foot { display: flex; gap: var(--ray-space-2); align-items: center; }
 /* The menu's host fills the sidebar body and the tree fills the host (a percentage min-height
    on the tree would not resolve), so every press on the empty space lands on the tree: it is
-   the context menu's trigger, the drop target for "move to the root", and what closes the menu. */
+   the context menu's trigger and the drop target for "move to the root". */
 #tree-menu { display: flex; flex-direction: column; min-height: 100%; }
 #tree-menu > [slot="trigger"] { flex: 1 1 auto; }
 

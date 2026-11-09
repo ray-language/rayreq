@@ -87,6 +87,7 @@ pub const COPYRIGHT_ES: string = "© 2026 Rayala · Hecho con raylang";
 
 pub struct Titles {
     file: string,
+    edit: string,
     request: string,
     view: string,
 }
@@ -94,6 +95,7 @@ pub struct Titles {
 pub fn titles(lang: string) -> Titles {
     Titles {
         file: tr(lang, "File", "Archivo"),
+        edit: tr(lang, "Edit", "Edición"),
         request: tr(lang, "Request", "Petición"),
         view: tr(lang, "View", "Ver")
     }
@@ -105,8 +107,19 @@ pub fn install(n: bridge.Native, lang: string) -> Result<int, string> {
     let t = titles(lang);
     bridge.menu(n, t.file, file_menu(lang))?;
     ui.edit_menu(edit_items())?;
+    rename_edit("Edit", t.edit)?;
     bridge.menu(n, t.request, request_menu(lang))?;
     bridge.menu(n, t.view, view_menu(lang))
+}
+
+/// The Edit menu's title. On macOS `edit_menu` fills the system's own Edit menu, already in the
+/// user's language; on Linux and Windows it creates one titled "Edit" (findings #311), which
+/// follows the bar's language like the others.
+fn rename_edit(old: string, new: string) -> Result<int, string> {
+    if (old == new || platform() == "macos") {
+        return Result.Ok(0);
+    }
+    ui.rename_menu(old, new)
 }
 
 /// `bridge.rename_menu`, skipping a title that does not change.
@@ -122,6 +135,7 @@ pub fn relabel(n: bridge.Native, from: string, to: string) -> Result<int, string
     let a = titles(from);
     let b = titles(to);
     rename(n, a.file, b.file)?;
+    rename_edit(a.edit, b.edit)?;
     rename(n, a.request, b.request)?;
     rename(n, a.view, b.view)?;
     bridge.replace_menu(n, b.file, file_menu(to))?;
