@@ -155,7 +155,7 @@ function showPopover(host, range, x) {
   const vars = host.varScope();
   fillPopover(range, vars ? vars.environment : "");
   const box = host.control.getBoundingClientRect();
-  p.anchorRect = () => ({ left: x, right: x, top: box.top, bottom: box.bottom, width: 0, height: box.height, x, y: box.top });
+  p.anchor = { left: x, right: x, top: box.top, bottom: box.bottom, width: 0, height: box.height, x, y: box.top };
   p.show();
   p.reposition?.();
 }
@@ -163,8 +163,7 @@ function showPopover(host, range, x) {
 /// The hover handling of one field.
 function hoverField(host) {
   host.addEventListener("pointermove", (e) => {
-    const layer = host._textLayer;
-    const range = layer && host.control ? layer.rangeAt(e.clientX, e.clientY) : null;
+    const range = host.highlightAt(e.clientX, e.clientY);
     if (!range || !range.name) {
       if (shown && shown.host === host) scheduleHide();
       else clearTimeout(showTimer);

@@ -21,7 +21,7 @@ sign = "Developer ID Application: ROBERTO CARLOS AYALA MENESES (A2CY27N22G)"
 notary = "rayala"
 
 [dependencies]
-elements = "^0.11.0"
+elements = "^0.12.0"
 net = "^0.14.0"
 db = "^0.7.2"
 yaml = "^0.1.1"
