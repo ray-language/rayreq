@@ -371,6 +371,7 @@ async function loadLastResponse(tab) {
     const last = await call("history.get", { id: tab.history[0].id });
     if (tab.response || tab.run) return;
     tab.response = last;
+    tab.respondedAt = tab.history[0].executed_at;
     emit("response", tab);
   } catch { /* no history to show */ }
 }
@@ -451,6 +452,7 @@ export async function send(tab = activeTab()) {
     const response = await call("send", { run, request: tab.draft });
     if (tab.run !== run) return; // cancelled meanwhile
     tab.response = response;
+    tab.respondedAt = Date.now();
     const applied = (response.captures || []).filter((c) => c.status === "applied").length;
     if (applied) {
       notify({ message: t(applied === 1 ? "response.capturedOne" : "response.captured", { n: applied, env: response.environment }), color: "green", autoClose: 2000 });

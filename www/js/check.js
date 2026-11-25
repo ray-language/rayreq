@@ -459,6 +459,26 @@ export async function run(port, sampleFile) {
     const typed = (text) => {
       const c = urlBox.control;
       c.focus();
+    // Resting the pointer on the open tab shows what it holds instead of a tooltip: the URL as
+    // written and as sent, the folder, whether it is saved and its last response.
+    {
+      const pop = $("tab-popover");
+      const body = $("tab-popover-body");
+      const node = $(`tab-${tab.id}`);
+      expect(!node.title, "the tab has no tooltip besides the panel");
+      node.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true, pointerType: "mouse" }));
+      expect(!pop.open, "the tab's panel waits for the pointer to rest");
+      await until(() => pop.open, "the tab's panel opens on hover");
+      expect(body.querySelector(".title")?.textContent === tab.draft.name, `it names the request: ${body.textContent}`);
+      const labels = [...body.querySelectorAll("dt")].map((d) => d.textContent).join();
+      const want = ["URL", t("tabs.sendsTo"), t("tabs.folder"), t("tabs.state"), t("tabs.lastResponse")].join();
+      expect(labels === want, `each fact has its label: ${labels}`);
+      const values = [...body.querySelectorAll("dd.value")].map((d) => d.textContent);
+      expect(values[0] === tab.draft.url && values[1] === tab.vars.url, `the URL as written and as sent: ${values}`);
+      node.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true, pointerType: "mouse" }));
+      await until(() => !pop.open, "a press on the tab closes its panel");
+    }
+
       c.value = text;
       c.setSelectionRange(text.length, text.length);
       c.dispatchEvent(new Event("input", { bubbles: true, composed: true }));

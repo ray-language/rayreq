@@ -27,7 +27,8 @@ function failureKey(error) {
   return "response.failed";
 }
 
-function statusColor(r) {
+/// The badge color of a response: green 2xx, blue 3xx, orange 4xx, red 5xx or none.
+export function statusColor(r) {
   if (!r.ok) return "red";
   const s = r.status;
   if (s >= 500) return "red";
@@ -212,6 +213,7 @@ async function renderHistory(tab) {
       tab.response = await call("history.get", { id: h.id });
       emit("response", tab);
     }));
+      tab.respondedAt = h.executed_at;
     box.append(b);
   }
 }
