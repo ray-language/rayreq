@@ -1,11 +1,11 @@
 #!/bin/sh
-# Installs the latest RayReq release on macOS or Linux, for the current user:
+# Installs the latest Ray Request release on macOS or Linux, for the current user:
 #
 #   curl -sSfL https://raw.githubusercontent.com/ray-language/rayreq/main/install.sh | sh
 #
 # It reads the release manifest (update.json), downloads the zip for this platform, checks its
 # SHA-256 and puts the app where it can later update itself:
-#   macOS   /Applications/RayReq.app (or ~/Applications when /Applications is not writable)
+#   macOS   /Applications/Ray Request.app (or ~/Applications when /Applications is not writable)
 #   Linux   ~/.local/opt/rayreq, with a launcher in ~/.local/share/applications
 # RAYREQ_VERSION=0.1.2 installs that release instead of the latest; RAYREQ_INSTALL_DIR=<dir>
 # installs there (the .app or the bundle directory goes inside it).
@@ -62,7 +62,7 @@ case "$url" in
   *) url="${manifest%/*}/$url" ;;
 esac
 
-echo "downloading RayReq $version for $key"
+echo "downloading Ray Request $version for $key"
 curl -sSfL "$url" -o "$work/app.zip" || fail "cannot download $url"
 got=$(digest "$work/app.zip")
 [ "$got" = "$sha" ] || fail "the download does not match the manifest (sha256 $got, expected $sha)"
@@ -78,11 +78,15 @@ if [ "$platform" = macos ]; then
     dest="$HOME/Applications"
     mkdir -p "$dest"
   fi
-  [ -d "$work/unpacked/RayReq.app" ] || fail "the zip holds no RayReq.app"
-  rm -rf "$dest/RayReq.app"
-  mv "$work/unpacked/RayReq.app" "$dest/RayReq.app"
-  echo "installed: $dest/RayReq.app"
-  echo "open it from Launchpad, Spotlight or: open \"$dest/RayReq.app\""
+  # Releases up to 0.1.7 hold RayReq.app, the app's former name.
+  app="Ray Request.app"
+  [ -d "$work/unpacked/$app" ] || app="RayReq.app"
+  [ -d "$work/unpacked/$app" ] || fail "the zip holds no Ray Request.app"
+  # Both names: the same app, never installed twice.
+  rm -rf "$dest/Ray Request.app" "$dest/RayReq.app"
+  mv "$work/unpacked/$app" "$dest/$app"
+  echo "installed: $dest/$app"
+  echo "open it from Launchpad, Spotlight or: open \"$dest/$app\""
 else
   dest=${RAYREQ_INSTALL_DIR:-$HOME/.local/opt}
   mkdir -p "$dest"
@@ -93,4 +97,4 @@ else
   echo "installed: $dest/rayreq/RayReq"
   echo "open it from the applications menu or run: $dest/rayreq/RayReq"
 fi
-echo "RayReq checks for new versions on its own (RayReq → Check for Updates…)."
+echo "Ray Request checks for new versions on its own (Ray Request → Check for Updates…)."

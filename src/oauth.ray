@@ -262,7 +262,7 @@ pub fn read_callback(target: string, path: string, state: string) -> Result<Call
 }
 
 fn page(title: string, text: string) -> string {
-    let body = "<!doctype html><meta charset=utf-8><title>RayReq</title><body style=\"font:16px system-ui;margin:3rem\"><h1 style=\"font-size:1.3rem\">${title}</h1><p>${text}</p>";
+    let body = "<!doctype html><meta charset=utf-8><title>Ray Request</title><body style=\"font:16px system-ui;margin:3rem\"><h1 style=\"font-size:1.3rem\">${title}</h1><p>${text}</p>";
     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${body.to_bytes().len()}\r\nConnection: close\r\n\r\n${body}"
 }
 
@@ -312,7 +312,7 @@ fn loop_code(p: Pending, deadline: int, cancel: Channel<bool>) -> Result<string,
         let target = visit(conn);
         let answer = read_callback(target, p.path, p.state);
         let reply = match (answer) {
-            Result.Ok(Callback.Code(_)) => page("Signed in", "RayReq has the authorization. You can close this tab."),
+            Result.Ok(Callback.Code(_)) => page("Signed in", "Ray Request has the authorization. You can close this tab."),
             Result.Ok(Callback.Denied(why)) => page("Not authorized", "The server said: ${escape(why)}"),
             Result.Ok(Callback.Other) => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             Result.Err(e) => page("Not accepted", escape(e)),

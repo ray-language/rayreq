@@ -13,7 +13,7 @@ export function available() {
 }
 
 export async function call(op, args = {}) {
-  if (!available()) throw new ApiError("not running inside RayReq");
+  if (!available()) throw new ApiError("not running inside Ray Request");
   const raw = await window.ray.request(JSON.stringify({ op, ...args }));
   const reply = typeof raw === "string" ? JSON.parse(raw) : raw;
   if (!reply || !reply.ok) throw new ApiError((reply && reply.error) || "no reply", reply);

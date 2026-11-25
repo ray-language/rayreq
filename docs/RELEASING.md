@@ -1,4 +1,4 @@
-# Releasing RayReq
+# Releasing Ray Request
 
 A release is a GitHub release `vX.Y.Z` holding one zip per platform and the signed update
 manifest. Installed apps read the manifest of the **latest** release
@@ -6,7 +6,8 @@ manifest. Installed apps read the manifest of the **latest** release
 
 ## 1. Version
 
-- `version` in `ray.toml` and `VERSION` in `src/api.ray` (the About window, the status bar).
+- `version` in `ray.toml`, `VERSION` in `src/api.ray` (the About window, the status bar) and
+  `USER_AGENT` in `src/exec.ray`.
 - `ray test` and `ray run src/main.ray --check` green; commit.
 
 ## 2. Artifacts
@@ -41,7 +42,7 @@ ray release seal dist
 ## 4. Publish
 
 ```sh
-gh release create $TAG dist/*.zip dist/update.json dist/update.json.sig --title "RayReq 0.1.2" --notes "…"
+gh release create $TAG dist/*.zip dist/update.json dist/update.json.sig --title "Ray Request 0.1.2" --notes "…"
 ```
 
 The release notes URL in the manifest is this release's page.
@@ -59,7 +60,7 @@ version into a directory, serve it on a high random port and point an installed 
 
 ```sh
 python3 -m http.server 0 --bind 127.0.0.1 --directory next/dist      # prints the port
-RAYREQ_UPDATE_URL=http://127.0.0.1:PORT/update.json "/path/RayReq.app/Contents/MacOS/RayReq" --update
+RAYREQ_UPDATE_URL=http://127.0.0.1:PORT/update.json "/path/Ray Request.app/Contents/MacOS/RayReq" --update
 ```
 
 `--update` installs without opening a window and without relaunching; the same env var on the

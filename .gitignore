@@ -4,6 +4,7 @@ node_modules/
 # `ray build --native` / `ray bundle`
 /rayreq
 RayReq.app/
+Ray Request.app/
 # `ray dev --device` pairing link (port + secret token)
 .ray-dev
 .DS_Store
