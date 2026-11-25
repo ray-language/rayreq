@@ -9,10 +9,11 @@ import { describe, tally } from "./assertions.js";
 import { call } from "./api.js";
 import { formatDuration, t } from "./i18n.js";
 import { emit, nextRun, state, tabOf } from "./state.js";
+import { dataTable, methodCell } from "./table.js";
 import { $, el } from "./util.js";
 
 /// The run on screen: {plan, rows, running, stopped, run, last}. One at a time.
-let current = null;
+let current = null; // .table: the <ray-table> of its steps
 
 const BADGE = { passed: "green", failed: "red", error: "red", skipped: "gray", stopped: "gray", running: "blue" };
 
@@ -45,31 +46,33 @@ function renderSteps() {
     box.append(el("ray-empty-state", { compact: true }, t("runner.empty")));
     return;
   }
-  const all = el("ray-checkbox", { size: "xs", "aria-label": t("runner.all") });
-  all.checked = true;
-  all.addEventListener("change", () => {
-    for (const r of current.rows) r.box.checked = all.checked;
-  });
-  const table = el("table", { class: "kv-table runner-table" });
-  table.append(el("tr", {},
-    el("th", {}, all),
-    ...["runner.request", "runner.status", "runner.time", "runner.result"].map((k) => el("th", { text: t(k) }))));
-  for (const step of steps) {
-    const box = el("ray-checkbox", { size: "xs", "aria-label": step.name });
-    box.checked = true;
-    const name = el("button", { class: "runner-name", type: "button", title: t("runner.open") },
-      el("span", { class: `method-tag m-${step.method}`, text: step.method === "DELETE" ? "DEL" : step.method === "OPTIONS" ? "OPT" : step.method }),
-      el("span", { text: step.name }),
-      step.path ? el("span", { class: "meta", text: step.path }) : null);
-    name.addEventListener("click", () => A.guard(async () => {
-      if (current.running) return;
-      $("runner-dialog").close("");
-      await A.openRequest(step.id);
-    }));
-    const row = { step, box, status: el("td", { class: "meta" }), time: el("td", { class: "meta" }), result: el("td") };
-    current.rows.push(row);
-    table.append(el("tr", { "data-id": String(step.id) }, el("td", {}, box), el("td", {}, name), row.status, row.time, row.result));
-  }
+  // A row per step: its cells are kept, so a run writes into them without drawing the table again.
+  const quiet = "color: var(--ray-muted-foreground); white-space: nowrap; font-variant-numeric: tabular-nums;";
+  current.rows = steps.map((step) => ({
+    id: step.id,
+    step,
+    status: el("span", { style: quiet }),
+    time: el("span", { style: quiet }),
+    result: el("span", { style: "display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 10rem;" }),
+  }));
+  const name = (row) => el("span", { style: "display: inline-flex; gap: 6px; align-items: baseline; white-space: nowrap;", title: t("runner.open") },
+    methodCell(row.step.method),
+    el("span", { text: row.step.name }),
+    row.step.path ? el("span", { style: "color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs);", text: row.step.path }) : null);
+  // Every step is checked to begin with; a click on a row (not on its box) opens its request.
+  const table = dataTable([
+    { key: "name", label: t("runner.request"), render: name },
+    { key: "status", label: t("runner.status"), render: (r) => r.status },
+    { key: "time", label: t("runner.time"), render: (r) => r.time },
+    { key: "result", label: t("runner.result"), render: (r) => r.result },
+  ], current.rows, { selectable: true, "clickable-rows": true, "no-hover": false, "sticky-header": true, id: "runner-table" });
+  table.selection = current.rows.map((r) => r.id);
+  table.addEventListener("ray-row-click", (e) => A.guard(async () => {
+    if (current.running) return;
+    $("runner-dialog").close("");
+    await A.openRequest(e.detail.row.step.id);
+  }));
+  current.table = table;
   box.append(table);
 }
 
@@ -78,7 +81,8 @@ function setRunning(running) {
   button.textContent = t(running ? "runner.stop" : "runner.run");
   button.color = running ? "red" : "";
   button.disabled = !running && !current.plan.steps.length;
-  for (const r of current.rows) r.box.disabled = running;
+  // The steps chosen belong to the run: no ticking or opening while it goes on.
+  if (current.table) current.table.inert = running;
   $("runner-delay").disabled = running;
   $("runner-stop-on-failure").disabled = running;
 }
@@ -88,7 +92,7 @@ function show(row, kind, { status = "", time = "", detail = "" } = {}) {
   row.time.textContent = time;
   // replaceChildren, unlike el(), writes a null child as the text "null".
   row.result.replaceChildren(el("ray-badge", { color: BADGE[kind], size: "xs", radius: "sm", "normal-case": true, "data-result": kind }, t(`runner.${kind}`)));
-  if (detail) row.result.append(el("span", { class: "runner-detail", text: detail }));
+  if (detail) row.result.append(el("span", { style: "color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); -webkit-user-select: text; user-select: text;", text: detail }));
 }
 
 /// What one answer means for the run.
@@ -119,7 +123,8 @@ async function pause(ms) {
 export async function run() {
   const c = current;
   if (!c || c.running) return null;
-  const chosen = c.rows.filter((r) => r.box.checked);
+  const picked = new Set(c.table ? c.table.selection : []);
+  const chosen = c.rows.filter((r) => picked.has(r.id));
   if (!chosen.length) return null;
   c.running = true;
   c.stopped = false;
@@ -129,7 +134,7 @@ export async function run() {
     r.status.textContent = "";
     r.time.textContent = "";
     r.result.replaceChildren();
-    if (!r.box.checked) show(r, "skipped");
+    if (!picked.has(r.id)) show(r, "skipped");
   }
   const delay = Math.max(0, Number($("runner-delay").value) || 0);
   const stopOnFailure = $("runner-stop-on-failure").checked;

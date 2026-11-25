@@ -12,6 +12,7 @@ import { AuthEditor } from "./auth.js";
 import { askTargets, confirm } from "./dialogs.js";
 import { KvEditor } from "./kv.js";
 import { activeTab, emit, folderOf, on, state } from "./state.js";
+import { cell, dataTable, dotCell } from "./table.js";
 import { $, PLACEHOLDER, debounce, el, setCount } from "./util.js";
 import { sourceText } from "./varfield.js";
 
@@ -73,15 +74,11 @@ export function renderVariables(tab = activeTab()) {
     return;
   }
   const used = usedNames(tab.draft);
-  const table = el("table", { class: "kv-table vars-table" });
-  table.append(el("tr", {},
-    el("th", { text: t("vars.name") }), el("th", { text: t("vars.value") }), el("th", { text: t("vars.source") })));
-  for (const x of v.variables) {
-    const name = el("td", { text: x.key });
-    if (used.has(x.key)) name.append(el("ray-badge", { size: "xs", variant: "dot", color: "green" }));
-    table.append(el("tr", {}, name, el("td", { class: "val", text: x.value }), el("td", { class: "src", text: sourceText(x, v.environment) })));
-  }
-  list.append(table);
+  list.append(dataTable([
+    { key: "key", label: t("vars.name"), render: (x) => cell("name", x.key, used.has(x.key) ? dotCell() : null) },
+    { key: "value", label: t("vars.value"), render: (x) => cell("value", x.value) },
+    { key: "source", label: t("vars.source"), render: (x) => cell("note", sourceText(x, v.environment)) },
+  ], v.variables, { "row-key": "key" }));
 }
 
 // ---- the active environment -----------------------------------------------------------------
@@ -402,25 +399,23 @@ async function renderCookies() {
     box.append(el("ray-empty-state", { compact: true }, t("cookies.empty")));
     return;
   }
-  const table = el("table", { class: "kv-table cookies-table" });
-  table.append(el("tr", {}, ...["cookies.domain", "cookies.name", "cookies.value", "cookies.path", "cookies.expires", "cookies.flags", null]
-    .map((k) => el("th", { text: k ? t(k) : "" }))));
-  for (const c of list) {
+  const remove = (c) => {
     const del = el("ray-icon-button", { size: "xs", variant: "subtle", color: "gray", label: t("cookies.delete") }, el("ray-icon", { name: "close" }));
     del.addEventListener("click", () => A.guard(async () => {
       await call("cookies.delete", { environment_id: env.id, name: c.name, domain: c.domain, path: c.path });
       await renderCookies();
     }));
-    table.append(el("tr", {},
-      el("td", { text: c.host_only ? c.domain : `${c.domain} (${t("cookies.subdomains")})` }),
-      el("td", { class: "val", text: c.name }),
-      el("td", { class: "val", text: c.value }),
-      el("td", { class: "meta", text: c.path }),
-      el("td", { class: "meta", text: c.expires ? formatTime(c.expires) : t("cookies.session") }),
-      el("td", { class: "meta", text: cookieFlags(c) }),
-      el("td", { class: "row-action" }, del)));
-  }
-  box.append(table);
+    return del;
+  };
+  box.append(dataTable([
+    { key: "domain", label: t("cookies.domain"), render: (c) => cell("note", c.host_only ? c.domain : `${c.domain} (${t("cookies.subdomains")})`) },
+    { key: "name", label: t("cookies.name"), render: (c) => cell("name", c.name) },
+    { key: "value", label: t("cookies.value"), render: (c) => cell("value", c.value) },
+    { key: "path", label: t("cookies.path"), render: (c) => cell("meta", c.path) },
+    { key: "expires", label: t("cookies.expires"), render: (c) => cell("meta", c.expires ? formatTime(c.expires) : t("cookies.session")) },
+    { key: "flags", label: t("cookies.flags"), render: (c) => cell("meta", cookieFlags(c)) },
+    { key: "delete", label: "", width: "1%", render: remove },
+  ], list.map((c, i) => ({ ...c, id: i })), { "sticky-header": true }));
 }
 
 async function clearCookies() {
