@@ -2,7 +2,7 @@
 name = "rayreq"
 version = "0.1.7"
 license = "Apache-2.0"
-raylang = "1.27.90"
+raylang = "1.27.114"
 
 # The page (www/) is plain HTML + ES modules on ray-elements, served by the process over ray://app.
 [native]
@@ -11,6 +11,8 @@ embed = ["www"]
 [app]
 public_key = "387c0da574710c40a7a3715fd7245980c695550249985529a7e08e4c12e80718"
 name = "RayReq"
+# What people read (the .app, the menu bar, the launchers); the binary and the zips keep `name`.
+display_name = "Ray Request"
 id = "org.raylang.rayreq"
 copyright = "© 2026 Rayala"
 # ray bundle renders the app icon from this PNG; brand/icon.svg is its source (make icon).

@@ -258,7 +258,7 @@ async function boot() {
   setLanguage(lang);
   $("language").value = lang;
   if (state.settings.language !== lang) A.setSetting("language", lang).catch(() => {});
-  $("status-version").textContent = `rayreq ${state.version}`;
+  $("status-version").textContent = `Ray Request ${state.version}`;
   $("status-hint").textContent = statusHint();
 
   initTree();

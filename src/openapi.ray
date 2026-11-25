@@ -155,7 +155,7 @@ pub fn convert(root: Node) -> Result<Imported, string> {
                 continue;
             }
             if (!model.METHODS.contains(method)) {
-                warn(cx, "${method} ${path}: rayreq does not send ${method} requests; left out");
+                warn(cx, "${method} ${path}: Ray Request does not send ${method} requests; left out");
                 continue;
             }
             let op = deref(cx, raw_op);

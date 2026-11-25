@@ -33,7 +33,7 @@ import store;
 import updates;
 import view;
 
-const APP_NAME: string = "RayReq";
+const APP_NAME: string = "Ray Request";
 
 /// How long after the window opens the startup update check runs.
 const STARTUP_CHECK_MS: int = 8000;

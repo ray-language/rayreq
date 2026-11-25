@@ -1,4 +1,4 @@
-# RayReq
+# Ray Request
 
 A REST client for the desktop, written in raylang with ray-elements: projects, nested
 folders, saved requests, a response viewer and per-request history. Its model is rikuest
@@ -28,7 +28,7 @@ irm https://raw.githubusercontent.com/ray-language/rayreq/main/install.ps1 | iex
 
 `RAYREQ_VERSION=0.1.2` installs that release instead of the latest; `RAYREQ_INSTALL_DIR`
 installs somewhere else. The zips are on the [releases page](https://github.com/ray-language/rayreq/releases)
-too. From then on the app checks for new versions on its own (RayReq → Check for Updates…).
+too. From then on the app checks for new versions on its own (Ray Request → Check for Updates…).
 
 ## What it does
 
@@ -76,7 +76,7 @@ too. From then on the app checks for new versions on its own (RayReq → Check f
   the same name wins, and credentials (an API key header too) never follow a redirect to
   another origin.
 - **OAuth 2** as one more auth type, on a request or a folder: authorization code with PKCE
-  (the system browser opens the sign-in and comes back to a loopback address RayReq listens
+  (the system browser opens the sign-in and comes back to a loopback address Ray Request listens
   on, `http://127.0.0.1:<port>/…`, any free port by default), client credentials and password.
   "Get new token" in the Auth tab runs the grant; a send with no valid token gets one by
   itself when it can (refreshing an expired token, or a grant without a browser), and fails
@@ -87,7 +87,7 @@ too. From then on the app checks for new versions on its own (RayReq → Check f
 - **Cookie jar**, one per environment: cookies set by a response (a login's redirect included)
   go with the next hops and the next sends, by the rules browsers use (domain and host-only,
   path, Secure, Max-Age/Expires capped at 400 days, `__Secure-`/`__Host-`); a cookie the rules
-  refuse is reported with the reason. Session cookies end when RayReq starts again. The jar can
+  refuse is reported with the reason. Session cookies end when Ray Request starts again. The jar can
   be viewed and emptied (Request ▸ Cookies…), and a request can opt out in its settings.
 - **cURL in and out**: File ▸ Import cURL… (⇧⌘I) turns a curl command — as browsers copy it,
   `$'…'` quoting included — into a new request; pasting one into the URL field fills the open
@@ -166,7 +166,7 @@ The database lives in `~/Library/Application Support/RayReq/rayreq.db` (macOS),
 
 ## Known limits
 
-- TLS certificate verification cannot be turned off yet (net/http can since 0.12; rayreq has
+- TLS certificate verification cannot be turned off yet (net/http can since 0.12; Ray Request has
   no setting for it).
 - `Host` and `Connection` given by hand replace the client's (a given `Host` is dropped on a
   redirect to another origin); a `Content-Length` that does not match the body, or any

@@ -1,4 +1,4 @@
-# Installs the latest RayReq release on Windows, for the current user:
+# Installs the latest Ray Request release on Windows, for the current user:
 #
 #   irm https://raw.githubusercontent.com/ray-language/rayreq/main/install.ps1 | iex
 #
@@ -36,7 +36,7 @@ try {
   $url = $artifact.url
   if ($url -notmatch '^https?://') { $url = ($manifest -replace '/[^/]*$', '/') + $url }
 
-  Write-Host "downloading RayReq $version for $key"
+  Write-Host "downloading Ray Request $version for $key"
   $zip = Join-Path $work 'app.zip'
   Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
   $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
@@ -52,7 +52,7 @@ try {
   New-Item -ItemType Directory -Force -Path $root | Out-Null
   $dest = Join-Path $root 'RayReq'
   if (Test-Path $dest) {
-    try { Remove-Item -Recurse -Force $dest } catch { throw "rayreq install: cannot replace $dest (is RayReq running? close it and try again)" }
+    try { Remove-Item -Recurse -Force $dest } catch { throw "rayreq install: cannot replace $dest (is Ray Request running? close it and try again)" }
   }
   Move-Item $bundle $dest
   # The bundle's script (Start Menu shortcut) runs in a child shell that may run scripts: the
@@ -60,7 +60,7 @@ try {
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dest 'install.ps1')
   if ($LASTEXITCODE -ne 0) { throw "rayreq install: the bundle's install.ps1 failed ($LASTEXITCODE)" }
   Write-Host "installed: $dest\RayReq.exe"
-  Write-Host 'open it from the Start Menu. RayReq checks for new versions on its own (RayReq -> Check for Updates...).'
+  Write-Host 'open it from the Start Menu. Ray Request checks for new versions on its own (Ray Request -> Check for Updates...).'
 } finally {
   Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }

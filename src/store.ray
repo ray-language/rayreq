@@ -218,7 +218,7 @@ fn migrate(s: Store) -> Result<int, string> {
     var version = schema_version(s)?;
     if (version > all.len()) {
         return Result.Err(
-            "the database has schema version ${version}, newer than this rayreq (${all.len()})"
+            "the database has schema version ${version}, newer than this Ray Request (${all.len()})"
         );
     }
     while (version < all.len()) {

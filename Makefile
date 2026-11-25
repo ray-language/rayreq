@@ -1,4 +1,4 @@
-# RayReq — common tasks. `make` (or `make help`) lists them.
+# Ray Request — common tasks. `make` (or `make help`) lists them.
 
 .DEFAULT_GOAL := help
 .PHONY: help run dev test test-native check check-markup fmt build bundle-macos icon
@@ -30,7 +30,7 @@ fmt: ## Format the raylang sources
 build: ## Native binary, refusing anything outside the native subset
 	ray build --native --no-stubs
 
-bundle-macos: ## RayReq.app
+bundle-macos: ## Ray Request.app
 	ray bundle
 
 icon: ## Render brand/icon.png (the bundle icon) from brand/icon.svg (needs rsvg-convert); copy it for the page's About
