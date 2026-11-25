@@ -8,6 +8,7 @@ import { renderResults, tally } from "./assertions.js";
 import { call } from "./api.js";
 import { formatDuration, formatSize, formatTime, formatWhen, t } from "./i18n.js";
 import { activeTab, emit, on } from "./state.js";
+import { cell, dataTable } from "./table.js";
 import { $, el, setCount } from "./util.js";
 
 const HIGHLIGHT_LIMIT = 300 * 1024; // bigger bodies are shown plain: highlighting is slow
@@ -98,9 +99,10 @@ function renderBody(tab) {
 
 function headerTable(pairs) {
   if (!pairs.length) return el("p", { class: "ray-muted", text: t("response.noHeaders") });
-  const table = el("table", { class: "kv-table" });
-  for (const [k, v] of pairs) table.append(el("tr", {}, el("td", { text: k }), el("td", { text: v })));
-  return table;
+  return dataTable([
+    { key: "name", label: t("kv.header"), render: (r) => cell("key", r.name) },
+    { key: "value", label: t("kv.value"), render: (r) => cell("value", r.value) },
+  ], pairs.map(([name, value], i) => ({ id: i, name, value })));
 }
 
 function renderRequest(r) {
@@ -211,9 +213,9 @@ async function renderHistory(tab) {
     );
     b.addEventListener("click", () => A.guard(async () => {
       tab.response = await call("history.get", { id: h.id });
+      tab.respondedAt = h.executed_at;
       emit("response", tab);
     }));
-      tab.respondedAt = h.executed_at;
     box.append(b);
   }
 }

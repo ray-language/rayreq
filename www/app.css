@@ -7,7 +7,7 @@ body { background: var(--ray-background); color: var(--ray-foreground); overflow
    under it). What is worth copying opts back in; fields stay editable regardless. WebKit only
    honors the prefixed property, which it also inherits into shadow roots. */
 body { -webkit-user-select: none; user-select: none; }
-pre.raw, ray-code, table.kv-table td:not(:first-child), #url-resolved, .response > ray-alert, .runner-detail,
+pre.raw, ray-code, #url-resolved, .response > ray-alert,
 *::part(input), *::part(textarea) {
   -webkit-user-select: text; user-select: text;
 }
@@ -236,14 +236,17 @@ pre.raw.wrap { white-space: pre-wrap; word-break: break-word; }
 .preview-image { max-width: 100%; border: 1px solid var(--ray-border); border-radius: var(--ray-radius-md); background: repeating-conic-gradient(var(--ray-muted) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
 .note { font-size: var(--ray-font-size-xs); color: var(--ray-muted-foreground); margin: 0 0 var(--ray-space-xs); }
 
-table.kv-table { width: 100%; border-collapse: collapse; font-size: var(--ray-font-size-xs); }
-table.kv-table td { padding: 4px 6px; border-block-end: 1px solid var(--ray-border); vertical-align: top; }
-table.kv-table th { padding: 4px 6px; text-align: start; font-weight: var(--ray-font-weight-medium); color: var(--ray-muted-foreground); border-block-end: 1px solid var(--ray-border); }
-table.kv-table td:first-child { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); white-space: nowrap; width: 1%; }
-table.kv-table td:last-child { font-family: var(--ray-font-mono); word-break: break-all; }
-/* A row's own button (delete) keeps the row as tall as its text and sits at its end. */
-table.kv-table td.row-action { width: 1%; padding-block: 0; vertical-align: middle; }
-table.kv-table td.row-action > ray-icon-button { width: 1.5rem; }
+/* The lists of names and values (variables, headers, cookies, the runner's steps) are
+   <ray-table>s (www/js/table.js): no wider than their pane or dialog, their own scroll takes
+   the columns that do not fit. Long lists keep the column titles in view. */
+.data-table { display: block; max-width: 100%; min-width: 0; font-size: var(--ray-font-size-xs); }
+#cookies-list > .data-table { --ray-table-max-height: 60vh; }
+#runner-list > .data-table { --ray-table-max-height: 55vh; }
+/* In a dialog: the table paints its sticky titles with the page's background, a darker band on
+   the dialog's card in the dark theme (finding #497). */
+ray-dialog .data-table { --ray-background: var(--ray-card); }
+/* The runner's steps start all ticked: the box says it, without tinting every row. */
+#runner-list > .data-table { --ray-primary-light: transparent; }
 
 .history-row {
   display: grid; grid-template-columns: auto auto 1fr auto auto; gap: var(--ray-space-sm); align-items: center;
@@ -257,7 +260,7 @@ table.kv-table td.row-action > ray-icon-button { width: 1.5rem; }
 .history-head > .note { margin: 0; }
 
 .hops { margin: 0 0 var(--ray-space-sm); padding: 0; list-style: none; font-size: var(--ray-font-size-xs); }
-.hops li { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); padding-block: 2px; }
+.hops li { font-family: var(--ray-font-mono); color: var(--ray-muted-foreground); padding-block: 2px; overflow-wrap: anywhere; }
 .tree-row .dirty-dot { color: var(--ray-primary); flex: none; font-size: var(--ray-font-size-md); line-height: 1; }
 /* A name being renamed in place: the field takes the name's place, at the row's height. */
 /* The field takes exactly the row's height, so the rows around it stay where they were. */
@@ -276,10 +279,6 @@ table.kv-table td.row-action > ray-icon-button { width: 1.5rem; }
 }
 .url-preview .label { font-weight: var(--ray-font-weight-medium); }
 .var-missing { color: var(--ray-orange-light-color); }
-/* A variable's name is what one looks for (in the text color); where it comes from is prose. */
-table.vars-table td:first-child { color: var(--ray-foreground); }
-table.vars-table td.src { font-family: inherit; word-break: normal; color: var(--ray-muted-foreground); white-space: nowrap; }
-.vars-table td.val { font-family: var(--ray-font-mono); word-break: break-all; }
 .env-head { flex-wrap: nowrap; align-items: end; }
 .inline-name { display: flex; gap: var(--ray-space-xs); align-items: center; }
 #env-vars, #folder-vars { max-height: 50vh; overflow: auto; }
@@ -301,6 +300,7 @@ table.vars-table td.src { font-family: inherit; word-break: normal; color: var(-
 .var-pop .src { color: var(--ray-muted-foreground); }
 .var-pop form { display: flex; flex-wrap: wrap; gap: var(--ray-space-xs); align-items: center; margin-block-start: var(--ray-space-1); }
 .var-pop form ray-input { flex: 1 1 10rem; min-width: 0; }
+.var-pop form ray-button { flex: none; }
 /* An open tab's panel: the method and name as on the tab, then what it holds; long URLs wrap. */
 .tab-pop { min-width: 16rem; }
 .tab-pop .head { display: flex; gap: var(--ray-space-xs); align-items: baseline; font-size: var(--ray-font-size-sm); font-weight: var(--ray-font-weight-medium); color: var(--ray-foreground); }
@@ -308,7 +308,6 @@ table.vars-table td.src { font-family: inherit; word-break: normal; color: var(-
 .tab-pop .facts dd { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ray-space-1); }
 .tab-pop .facts dd.value { display: block; }
 .tab-pop .dirty { color: var(--ray-orange-light-color); }
-.var-pop form ray-button { flex: none; }
 .capture-row { display: flex; gap: var(--ray-space-2); align-items: center; padding: var(--ray-space-1) 0; font-size: var(--ray-font-size-sm); }
 /* Test results: the badges share a width, so the descriptions start in one column; what the user
    typed is code, the words around it are text. */
@@ -331,24 +330,9 @@ table.vars-table td.src { font-family: inherit; word-break: normal; color: var(-
 
 .block-unresolved { margin-block-start: var(--ray-space-3); }
 #vars-list { margin-block-end: var(--ray-space-3); }
-#cookies-list { max-height: 60vh; overflow: auto; }
-.cookies-table td.val { font-family: var(--ray-font-mono); word-break: break-all; }
-.cookies-table td.meta { color: var(--ray-muted-foreground); white-space: nowrap; }
 
 /* ---- runner -------------------------------------------------------------------------------- */
 
-#runner-list { max-height: 55vh; overflow: auto; }
-.runner-table td { vertical-align: middle; }
-.runner-table td.meta { color: var(--ray-muted-foreground); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.runner-name { all: unset; cursor: pointer; display: inline-flex; gap: 6px; align-items: baseline; white-space: nowrap; max-width: 20rem; }
-.runner-name > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
-.runner-name .meta { overflow: hidden; text-overflow: ellipsis; }
-/* The result cell is text (kv-table writes its last cell as code). */
-table.runner-table td:last-child { font-family: inherit; word-break: normal; }
-.runner-name:hover span:nth-child(2), .runner-name:focus-visible span:nth-child(2) { text-decoration: underline; }
-.runner-name:focus-visible { outline: 2px solid var(--ray-ring); outline-offset: 2px; border-radius: 4px; }
-.runner-name .meta { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
-.runner-detail { margin-inline-start: 6px; color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
 .runner-delay-label { font-size: var(--ray-font-size-xs); }
 .runner-delay { width: 7rem; }
 .runner-summary { margin: 0; font-size: var(--ray-font-size-sm); font-weight: var(--ray-font-weight-medium); min-height: 1.4em; }

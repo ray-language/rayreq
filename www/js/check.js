@@ -54,6 +54,12 @@ function suggested(host) {
   return list && list.matches(":popover-open") ? [...list.querySelectorAll(".s-label")].map((x) => x.firstChild.textContent) : [];
 }
 
+/// The body rows of the <ray-table> in `box` (drawn in its shadow tree).
+function tableRows(box) {
+  const table = box.querySelector("ray-table");
+  return table ? [...table.shadowRoot.querySelectorAll("tbody tr:not(.empty)")] : [];
+}
+
 async function until(cond, what, ms = 8000) {
   const end = Date.now() + ms;
   while (!cond()) {
@@ -453,12 +459,6 @@ export async function run(port, sampleFile) {
       await until(() => tab.vars && tab.vars.missing.join() === "nope", "missing again");
     }
 
-    // Typing {{ suggests the variables that reach the request; Enter completes the name, and
-    // neither Enter nor Escape reaches the field (no send, no dialog closed).
-    const keep = urlBox.value;
-    const typed = (text) => {
-      const c = urlBox.control;
-      c.focus();
     // Resting the pointer on the open tab shows what it holds instead of a tooltip: the URL as
     // written and as sent, the folder, whether it is saved and its last response.
     {
@@ -479,6 +479,12 @@ export async function run(port, sampleFile) {
       await until(() => !pop.open, "a press on the tab closes its panel");
     }
 
+    // Typing {{ suggests the variables that reach the request; Enter completes the name, and
+    // neither Enter nor Escape reaches the field (no send, no dialog closed).
+    const keep = urlBox.value;
+    const typed = (text) => {
+      const c = urlBox.control;
+      c.focus();
       c.value = text;
       c.setSelectionRange(text.length, text.length);
       c.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
@@ -610,9 +616,10 @@ export async function run(port, sampleFile) {
     const openingCookies = V.openCookies();
     await until(() => $("cookies-dialog").open, "the cookies dialog opened");
     await openingCookies;
-    const cookieRows = $("cookies-list").querySelectorAll("tr");
-    expect(cookieRows.length === 2 && cookieRows[1].textContent.includes("sid"), "the jar lists the cookie");
-    cookieRows[1].querySelector("ray-icon-button").click();
+    await until(() => tableRows($("cookies-list")).length, "the jar's table is drawn");
+    const cookieRows = tableRows($("cookies-list"));
+    expect(cookieRows.length === 1 && cookieRows[0].textContent.includes("sid"), "the jar lists the cookie");
+    cookieRows[0].querySelector("ray-icon-button").click();
     await until(() => $("cookies-list").querySelector("ray-empty-state"), "the cookie was deleted");
     $("cookies-dialog").close("");
     await A.send(tab);
@@ -773,18 +780,24 @@ export async function run(port, sampleFile) {
     const openingRunner = R.openRunner(specOut.folder_id);
     await until(() => $("runner-dialog").open, "the runner opened");
     await openingRunner;
-    const runRows = () => [...$("runner-list").querySelectorAll("tr[data-id]")];
+    const runRows = () => tableRows($("runner-list"));
+    // A step is ticked or not with its row's box, as a click would.
+    const choose = (row, on) => {
+      const box = row.querySelector('input[type="checkbox"]');
+      if (box.checked !== on) box.click();
+    };
+    await until(() => runRows().length === 3, "the runner's table is drawn");
     expect(runRows().map((r) => r.textContent.includes("Missing") ? "M" : r.textContent.includes("Echo a query") ? "G" : "P").join("") === "GPM",
       `run order: ${runRows().map((r) => r.textContent).join(" | ")}`);
     const counts = await R.run();
     const results = runRows().map((r) => r.querySelector("[data-result]")?.dataset.result);
     expect(counts && counts.passed === 2 && counts.failed === 1 && counts.errors === 0 && results.join() === "passed,passed,failed",
       `run: ${JSON.stringify(counts)} ${results}`);
-    expect(!$("runner-list").textContent.includes("null"), `a result without detail: ${$("runner-list").textContent}`);
+    expect(!runRows().some((r) => r.textContent.includes("null")), `a result without detail: ${runRows().map((r) => r.textContent)}`);
     expect($("runner-summary").dataset.result === "failed" && runRows()[2].textContent.includes("404"), "the summary and the 404");
     expect($("runner-progress").color === "red", `the bar ends in the verdict: ${$("runner-progress").color}`);
     // Unchecked steps are skipped; stopping at the first failure leaves the rest unsent.
-    runRows()[1].querySelector("ray-checkbox").checked = false;
+    choose(runRows()[1], false);
     $("runner-stop-on-failure").checked = true;
     const again = await R.run();
     const results2 = runRows().map((r) => r.querySelector("[data-result]")?.dataset.result);
@@ -799,7 +812,7 @@ export async function run(port, sampleFile) {
     await call("requests.save", { request: { ...echoStored, assertions: [
       { source: "json", path: "method", op: "eq", expected: "POST", enabled: true },
     ] } });
-    runRows()[1].querySelector("ray-checkbox").checked = true;
+    choose(runRows()[1], true);
     const third = await R.run();
     const results3 = runRows().map((r) => r.querySelector("[data-result]")?.dataset.result);
     expect(third.passed === 2 && third.failed === 1 && results3.join() === "failed,passed,passed"
