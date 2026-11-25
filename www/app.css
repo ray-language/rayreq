@@ -301,6 +301,13 @@ table.vars-table td.src { font-family: inherit; word-break: normal; color: var(-
 .var-pop .src { color: var(--ray-muted-foreground); }
 .var-pop form { display: flex; flex-wrap: wrap; gap: var(--ray-space-xs); align-items: center; margin-block-start: var(--ray-space-1); }
 .var-pop form ray-input { flex: 1 1 10rem; min-width: 0; }
+/* An open tab's panel: the method and name as on the tab, then what it holds; long URLs wrap. */
+.tab-pop { min-width: 16rem; }
+.tab-pop .head { display: flex; gap: var(--ray-space-xs); align-items: baseline; font-size: var(--ray-font-size-sm); font-weight: var(--ray-font-weight-medium); color: var(--ray-foreground); }
+.tab-pop .head .method-tag { width: auto; font-size: var(--ray-font-size-xs); }
+.tab-pop .facts dd { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ray-space-1); }
+.tab-pop .facts dd.value { display: block; }
+.tab-pop .dirty { color: var(--ray-orange-light-color); }
 .var-pop form ray-button { flex: none; }
 .capture-row { display: flex; gap: var(--ray-space-2); align-items: center; padding: var(--ray-space-1) 0; font-size: var(--ray-font-size-sm); }
 /* Test results: the badges share a width, so the descriptions start in one column; what the user
