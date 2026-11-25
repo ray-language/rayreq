@@ -13,13 +13,13 @@
 <body>
 <ray-app-shell id="shell" padding="0">
   <header slot="header" class="topbar">
-    <ray-icon-button id="toggle-sidebar" variant="subtle" size="xs" label="Toggle sidebar" data-i18n-attr="label:view.toggleSidebar"><ray-icon name="panel-left"></ray-icon></ray-icon-button>
+    <ray-icon-button id="toggle-sidebar" variant="subtle" color="gray" size="xs" label="Toggle sidebar" data-i18n-attr="label:view.toggleSidebar"><ray-icon name="panel-left"></ray-icon></ray-icon-button>
     <ray-doc-tabs id="tabs" class="tabstrip" panel="workspace" data-i18n-attr="label:tabs.label,close-label:tabs.close,dirty-label:tabs.dirty"></ray-doc-tabs>
     <ray-group gap="xs" class="top-actions">
       <ray-group gap="0" class="env-picker">
         <ray-select id="environment" size="xs" data-i18n-attr="aria-label:env.label,placeholder:env.label"></ray-select>
         <ray-menu id="env-tools" placement="bottom-end">
-          <ray-icon-button slot="trigger" id="manage-envs" size="xs" variant="subtle" label="Environments and cookies" data-i18n-attr="label:env.tools"><ray-icon name="settings"></ray-icon></ray-icon-button>
+          <ray-icon-button slot="trigger" id="manage-envs" size="xs" variant="subtle" color="gray" label="Environments and cookies" data-i18n-attr="label:env.tools"><ray-icon name="settings"></ray-icon></ray-icon-button>
           <ray-menu-item value="environments"><ray-icon slot="left" name="monitor"></ray-icon><span data-i18n="env.manage"></span></ray-menu-item>
           <ray-menu-item value="cookies"><ray-icon slot="left" name="cookie"></ray-icon><span data-i18n="cookies.manage"></span></ray-menu-item>
         </ray-menu>
@@ -41,7 +41,7 @@
         <ray-group gap="xs" class="project-row">
           <ray-select id="project" size="xs" class="grow" data-i18n-attr="placeholder:project.choose,aria-label:project.label"></ray-select>
           <ray-menu id="project-menu" placement="bottom-end">
-            <ray-icon-button slot="trigger" size="xs" variant="subtle" label="Project actions" data-i18n-attr="label:project.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
+            <ray-icon-button slot="trigger" size="xs" variant="subtle" color="gray" label="Project actions" data-i18n-attr="label:project.actions"><ray-icon name="more-horizontal"></ray-icon></ray-icon-button>
             <ray-menu-item value="new"><ray-icon slot="left" name="plus"></ray-icon><span data-i18n="project.new"></span></ray-menu-item>
             <ray-menu-item value="edit" data-needs-project><ray-icon slot="left" name="pencil"></ray-icon><span data-i18n="project.edit"></span></ray-menu-item>
             <ray-menu-divider></ray-menu-divider>
@@ -90,8 +90,8 @@
             <ray-tabs id="req-tabs" value="params" size="xs" class="pane-tabs">
               <ray-tab value="params" id="req-params-tab"><span data-i18n="request.params"></span></ray-tab>
               <ray-tab value="headers" id="req-headers-tab"><span data-i18n="request.headers"></span></ray-tab>
-              <ray-tab value="auth"><span data-i18n="request.auth"></span><ray-badge slot="right" size="xs" variant="dot" color="green" id="has-auth" hidden></ray-badge></ray-tab>
-              <ray-tab value="body"><span data-i18n="request.body"></span><ray-badge slot="right" size="xs" variant="dot" id="has-body" hidden></ray-badge></ray-tab>
+              <ray-tab value="auth"><span data-i18n="request.auth"></span><span class="tab-dot" data-color="green" id="has-auth" hidden></span></ray-tab>
+              <ray-tab value="body"><span data-i18n="request.body"></span><span class="tab-dot" id="has-body" hidden></span></ray-tab>
               <ray-tab value="captures" id="req-captures-tab"><span data-i18n="request.captures"></span></ray-tab>
               <ray-tab value="assertions" id="req-assertions-tab"><span data-i18n="request.assertions"></span></ray-tab>
               <ray-tab value="variables" id="req-variables-tab" data-color="orange"><span data-i18n="request.variables"></span></ray-tab>
@@ -158,10 +158,10 @@
                 <span id="size" class="metric"></span>
                 <span class="grow"></span>
                 <ray-tooltip data-i18n-attr="label:response.copy">
-                  <ray-icon-button id="copy-body" size="sm" variant="subtle" label="Copy body" data-i18n-attr="label:response.copy"><ray-icon name="copy"></ray-icon></ray-icon-button>
+                  <ray-icon-button id="copy-body" size="sm" variant="subtle" color="gray" label="Copy body" data-i18n-attr="label:response.copy"><ray-icon name="copy"></ray-icon></ray-icon-button>
                 </ray-tooltip>
                 <ray-tooltip data-i18n-attr="label:response.saveBody">
-                  <ray-icon-button id="save-body" size="sm" variant="subtle" label="Save body to a file" data-i18n-attr="label:response.saveBody"><ray-icon name="download"></ray-icon></ray-icon-button>
+                  <ray-icon-button id="save-body" size="sm" variant="subtle" color="gray" label="Save body to a file" data-i18n-attr="label:response.saveBody"><ray-icon name="download"></ray-icon></ray-icon-button>
                 </ray-tooltip>
               </div>
               <ray-alert id="response-error" color="red" variant="light" hidden></ray-alert>

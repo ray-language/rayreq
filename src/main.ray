@@ -256,6 +256,8 @@ fn run(check: bool) -> Result<int, string> {
     o.min_width = 860;
     o.min_height = 540;
     o.kind = "full_content";
+    // As tall as the page's top bar: the traffic lights center on its controls.
+    o.titlebar = "compact";
     if (!check) {
         o.autosave = "rayreq.main";
     }
