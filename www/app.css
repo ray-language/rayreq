@@ -39,6 +39,8 @@ pre.raw, ray-code, #url-resolved, .response > ray-alert,
 }
 :root[data-theme="dark"] ray-app-shell[data-titlebar] { --app-edge: 1px; }
 ray-app-shell::part(header) { background: var(--app-chrome); border-block-end: 1px solid var(--ray-border); }
+/* Full screen (main.js trackFullScreen): no window buttons to leave room for. */
+:root[data-fullscreen] ray-app-shell { --ray-titlebar-inset: 0px; }
 ray-statusbar { background: var(--app-chrome); }
 
 ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: column; }

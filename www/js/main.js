@@ -240,9 +240,24 @@ function followTheme() {
   onThemeChange(({ theme }) => tell(theme));
 }
 
+// In full screen macOS hides the window buttons, so the top bar need not leave room for them.
+// raylang sends no full-screen event (only "frame", as for any move or resize): only a
+// full-screen window is as wide as the screen and taller than its area under the menu bar.
+// <html> then gets data-fullscreen (app.css).
+function trackFullScreen() {
+  if (!state.host?.titlebar) return;
+  const sync = () => {
+    const full = innerWidth >= screen.width && innerHeight > screen.availHeight;
+    document.documentElement.toggleAttribute("data-fullscreen", full);
+  };
+  addEventListener("resize", sync);
+  sync();
+}
+
 async function boot() {
   quietContextMenu();
   state.host = await enableRaylang();
+  trackFullScreen();
   initAccent();
   if (!available()) {
     setLanguage(pickLanguage(null));
