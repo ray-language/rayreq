@@ -12,7 +12,7 @@ import { AuthEditor } from "./auth.js";
 import { askTargets, confirm } from "./dialogs.js";
 import { KvEditor } from "./kv.js";
 import { activeTab, emit, folderOf, on, state } from "./state.js";
-import { cell, dataTable, dotCell } from "./table.js";
+import { dataTable, withDot } from "./table.js";
 import { $, PLACEHOLDER, debounce, el, setCount } from "./util.js";
 import { sourceText } from "./varfield.js";
 
@@ -75,9 +75,9 @@ export function renderVariables(tab = activeTab()) {
   }
   const used = usedNames(tab.draft);
   list.append(dataTable([
-    { key: "key", label: t("vars.name"), render: (x) => cell("name", x.key, used.has(x.key) ? dotCell() : null) },
-    { key: "value", label: t("vars.value"), render: (x) => cell("value", x.value) },
-    { key: "source", label: t("vars.source"), render: (x) => cell("note", sourceText(x, v.environment)) },
+    { key: "key", label: t("vars.name"), part: "name", render: (x) => withDot(x.key, used.has(x.key)) },
+    { key: "value", label: t("vars.value"), part: "value" },
+    { key: "source", label: t("vars.source"), part: "note", render: (x) => sourceText(x, v.environment) },
   ], v.variables, { "row-key": "key" }));
 }
 
@@ -408,12 +408,12 @@ async function renderCookies() {
     return del;
   };
   box.append(dataTable([
-    { key: "domain", label: t("cookies.domain"), render: (c) => cell("note", c.host_only ? c.domain : `${c.domain} (${t("cookies.subdomains")})`) },
-    { key: "name", label: t("cookies.name"), render: (c) => cell("name", c.name) },
-    { key: "value", label: t("cookies.value"), render: (c) => cell("value", c.value) },
-    { key: "path", label: t("cookies.path"), render: (c) => cell("meta", c.path) },
-    { key: "expires", label: t("cookies.expires"), render: (c) => cell("meta", c.expires ? formatTime(c.expires) : t("cookies.session")) },
-    { key: "flags", label: t("cookies.flags"), render: (c) => cell("meta", cookieFlags(c)) },
+    { key: "domain", label: t("cookies.domain"), part: "note", render: (c) => c.host_only ? c.domain : `${c.domain} (${t("cookies.subdomains")})` },
+    { key: "name", label: t("cookies.name"), part: "name" },
+    { key: "value", label: t("cookies.value"), part: "value" },
+    { key: "path", label: t("cookies.path"), part: "meta" },
+    { key: "expires", label: t("cookies.expires"), part: "meta", render: (c) => c.expires ? formatTime(c.expires) : t("cookies.session") },
+    { key: "flags", label: t("cookies.flags"), part: "meta", render: (c) => cookieFlags(c) },
     { key: "delete", label: "", width: "1%", render: remove },
   ], list.map((c, i) => ({ ...c, id: i })), { "sticky-header": true }));
 }

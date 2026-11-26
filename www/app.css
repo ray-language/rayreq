@@ -22,15 +22,8 @@ pre.raw, ray-code, #url-resolved, .response > ray-alert,
 .code-area::part(textarea) { font-size: var(--ray-font-size-xs); tab-size: 2; }
 [hidden] { display: none !important; }
 
-/* The frame (header, sidebar, status bar) in one tone around the white working area. */
-/* Muted is a hair off white in the light theme but several steps off the page in the dark one:
-   the same share of it there would make the frame a lighter slab, swallow its own borders and
-   punch the fields in it as dark holes. Less of it gives both themes the same quiet step. */
-:root {
-  --app-chrome: light-dark(
-    color-mix(in srgb, var(--ray-muted) 70%, var(--ray-background)),
-    color-mix(in srgb, var(--ray-muted) 30%, var(--ray-background)));
-}
+/* The frame (header, sidebar, status bar) in one tone around the white working area:
+   ray-elements' --ray-sidebar. */
 /* In the dark theme macOS draws a light line inside the window's top edge, over the page: the
    top bar centers its controls in what is left under it. */
 :root { --app-edge: 0px; }
@@ -38,17 +31,17 @@ pre.raw, ray-code, #url-resolved, .response > ray-alert,
   :root:not([data-theme="light"]) ray-app-shell[data-titlebar] { --app-edge: 1px; }
 }
 :root[data-theme="dark"] ray-app-shell[data-titlebar] { --app-edge: 1px; }
-ray-app-shell::part(header) { background: var(--app-chrome); border-block-end: 1px solid var(--ray-border); }
+ray-app-shell::part(header) { background: var(--ray-sidebar); border-block-end: 1px solid var(--ray-border); }
 /* Full screen (main.js trackFullScreen): no window buttons to leave room for. */
 :root[data-fullscreen] ray-app-shell { --ray-titlebar-inset: 0px; }
-ray-statusbar { background: var(--app-chrome); }
+ray-statusbar { background: var(--ray-sidebar); }
 
 ray-app-shell::part(main) { overflow: hidden; display: flex; flex-direction: column; }
 /* The sidebar and the rest side by side: the divider resizes the sidebar, collapsing it hides it. */
 .layout { flex: 1 1 auto; min-height: 0; height: 100%; }
 /* The divider's track is wider than its line: its sidebar half takes the sidebar's tone, so the
    frame meets the line with no strip of page between them. */
-.layout::part(divider) { background: linear-gradient(to right, var(--app-chrome) 50%, transparent 50%); }
+.layout::part(divider) { background: linear-gradient(to right, var(--ray-sidebar) 50%, transparent 50%); }
 /* Toasts rise above the status bar instead of covering its hints. */
 ray-toaster { bottom: 1.5rem; }
 #main { display: flex; flex-direction: column; height: 100%; min-height: 0; }
@@ -59,7 +52,7 @@ ray-toaster { bottom: 1.5rem; }
    left edge; the divider is its border. */
 .sidebar {
   box-sizing: border-box; display: flex; flex-direction: column; height: 100%; overflow: hidden;
-  background: var(--app-chrome);
+  background: var(--ray-sidebar);
 }
 .side-head, .side-foot { flex: none; padding: var(--ray-space-2); }
 .side-body { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: var(--ray-space-2); }
@@ -121,7 +114,7 @@ ray-toaster { bottom: 1.5rem; }
    apart) while a hovered one jumps to muted: the open tab takes muted and a lighter border, a
    hovered one half of that. The light theme keeps the defaults. */
 .tabstrip > ray-doc-tab:hover {
-  background: light-dark(var(--ray-muted), color-mix(in srgb, var(--ray-muted) 45%, var(--app-chrome)));
+  background: light-dark(var(--ray-muted), color-mix(in srgb, var(--ray-muted) 45%, var(--ray-sidebar)));
 }
 .tabstrip > ray-doc-tab[data-active] {
   background: light-dark(var(--ray-card), var(--ray-muted));
@@ -244,11 +237,25 @@ pre.raw.wrap { white-space: pre-wrap; word-break: break-word; }
 .data-table { display: block; max-width: 100%; min-width: 0; font-size: var(--ray-font-size-xs); }
 #cookies-list > .data-table { --ray-table-max-height: 60vh; }
 #runner-list > .data-table { --ray-table-max-height: 55vh; }
-/* In a dialog: the table paints its sticky titles with the page's background, a darker band on
-   the dialog's card in the dark theme (finding #497). */
-ray-dialog .data-table { --ray-background: var(--ray-card); }
 /* The runner's steps start all ticked: the box says it, without tinting every row. */
-#runner-list > .data-table { --ray-primary-light: transparent; }
+#runner-list > .data-table { --ray-table-selected-background: transparent; }
+/* What a column holds (its `part`, table.js). A narrow pane or dialog does not squeeze a column
+   into one letter per line: names and metadata keep their line, a value keeps a readable width,
+   and the table's own scroll takes what the container cannot hold. */
+/* Code that may be long (a header's value, a URL, a secret): it breaks anywhere, never narrower
+   than a readable column. Worth copying, unlike the app's chrome. */
+.data-table::part(value) {
+  min-width: 12rem; font-family: var(--ray-font-mono); overflow-wrap: anywhere;
+  -webkit-user-select: text; user-select: text;
+}
+/* A name (a variable, a header, a cookie): code on one line. */
+.data-table::part(name) { font-family: var(--ray-font-mono); white-space: nowrap; }
+/* A header's name: a name, quieter than its value. */
+.data-table::part(key) { font-family: var(--ray-font-mono); white-space: nowrap; color: var(--ray-muted-foreground); }
+/* Where something comes from, a path, a date: quiet, on one line. */
+.data-table::part(meta) { color: var(--ray-muted-foreground); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* A quiet phrase that may wrap between its words. */
+.data-table::part(note) { min-width: 8rem; color: var(--ray-muted-foreground); }
 
 .history-row {
   display: grid; grid-template-columns: auto auto 1fr auto auto; gap: var(--ray-space-sm); align-items: center;
