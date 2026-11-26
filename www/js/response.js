@@ -8,7 +8,7 @@ import { renderResults, tally } from "./assertions.js";
 import { call } from "./api.js";
 import { formatDuration, formatSize, formatTime, formatWhen, t } from "./i18n.js";
 import { activeTab, emit, on } from "./state.js";
-import { cell, dataTable } from "./table.js";
+import { dataTable } from "./table.js";
 import { $, el, setCount } from "./util.js";
 
 const HIGHLIGHT_LIMIT = 300 * 1024; // bigger bodies are shown plain: highlighting is slow
@@ -100,8 +100,8 @@ function renderBody(tab) {
 function headerTable(pairs) {
   if (!pairs.length) return el("p", { class: "ray-muted", text: t("response.noHeaders") });
   return dataTable([
-    { key: "name", label: t("kv.header"), render: (r) => cell("key", r.name) },
-    { key: "value", label: t("kv.value"), render: (r) => cell("value", r.value) },
+    { key: "name", label: t("kv.header"), part: "key" },
+    { key: "value", label: t("kv.value"), part: "value" },
   ], pairs.map(([name, value], i) => ({ id: i, name, value })));
 }
 
